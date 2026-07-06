@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var isDefaultState by mutableStateOf(false)
+    private var bypassOnboarding by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,7 +34,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             PhoneTheme {
-                if (isDefaultState) {
+                if (isDefaultState || bypassOnboarding) {
                     MainScreen()
                 } else {
                     SetDefaultDialerScreen(
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
                             defaultDialerManager.createRequestRoleIntent()?.let {
                                 roleRequestLauncher.launch(it)
                             }
+                        },
+                        onLaterClick = {
+                            bypassOnboarding = true
                         }
                     )
                 }
