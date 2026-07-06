@@ -1,7 +1,68 @@
 package com.raushan.phone.data
 
 import android.content.Context
+import android.provider.ContactsContract
+import com.raushan.phone.data.models.Contact
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class ContactsRepository(private val context: Context) {
-    // Implementation to read ContactsContract
+    
+    suspend fun getContacts(): List<Contact> = withContext(Dispatchers.IO) {
+        val contacts = mutableListOf<Contact>()
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER
+        )
+        
+        val cursor = context.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            projection,
+            null,
+            null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        )
+        
+        cursor?.use {
+            val idIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+            val nameIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            
+            while (it.moveToNext()) {
+                val id = it.getLong(idIndex)
+                val name = it.getString(nameIndex) ?: "Unknown"
+                val number = it.getString(numberIndex) ?: ""
+                contacts.add(Contact(id, name, number))
+            }
+        }
+        contacts
+    }
+
+    suspend fun getContactById(contactId: Long): Contact? = withContext(Dispatchers.IO) {
+        var contact: Contact? = null
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER
+        )
+        
+        val cursor = context.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            projection,
+            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+            arrayOf(contactId.toString()),
+            null
+        )
+        
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val id = it.getLong(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
+                val name = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)) ?: "Unknown"
+                val number = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: ""
+                contact = Contact(id, name, number)
+            }
+        }
+        contact
+    }
 }

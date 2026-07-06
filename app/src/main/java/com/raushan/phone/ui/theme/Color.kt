@@ -2,10 +2,41 @@ package com.raushan.phone.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Stitch Design Tokens - Named Colors
+val Primary = Color(0xFFA3C9FF)
+val OnPrimary = Color(0xFF00315C)
+val PrimaryContainer = Color(0xFF3399FF)
+val OnPrimaryContainer = Color(0xFF00305A)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+val Secondary = Color(0xFFC8C6C5)
+val OnSecondary = Color(0xFF303030)
+val SecondaryContainer = Color(0xFF474746)
+val OnSecondaryContainer = Color(0xFFB7B5B4)
+
+val Tertiary = Color(0xFFFFB77B)
+val OnTertiary = Color(0xFF4D2700)
+val TertiaryContainer = Color(0xFFE27D00)
+val OnTertiaryContainer = Color(0xFF4B2600)
+
+val Background = Color(0xFF131313)
+val OnBackground = Color(0xFFE5E2E1)
+
+val Surface = Color(0xFF131313)
+val OnSurface = Color(0xFFE5E2E1)
+val SurfaceVariant = Color(0xFF353534)
+val OnSurfaceVariant = Color(0xFFC0C7D5)
+
+val Outline = Color(0xFF8A919E)
+val OutlineVariant = Color(0xFF404753)
+
+val Error = Color(0xFFFFB4AB)
+val OnError = Color(0xFF690005)
+val ErrorContainer = Color(0xFF93000A)
+val OnErrorContainer = Color(0xFFFFDAD6)
+
+// Functional Colors from Brand Description
+val DeepCharcoal = Color(0xFF121212)
+val ElectricBlue = Color(0xFF3399FF)
+val CardSurface = Color(0xFF1E1E1E)
+val ElevationLevel2 = Color(0xFF242424)
+val InputBackground = Color(0xFF2A2A2A)
