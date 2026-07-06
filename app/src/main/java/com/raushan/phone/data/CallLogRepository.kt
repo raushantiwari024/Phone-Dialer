@@ -1,14 +1,26 @@
 package com.raushan.phone.data
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.CallLog
+import androidx.core.content.ContextCompat
 import com.raushan.phone.data.models.CallLogEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class CallLogRepository(private val context: Context) {
     
+    private fun hasReadCallLogPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_CALL_LOG
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     suspend fun getCallLogs(): List<CallLogEntry> = withContext(Dispatchers.IO) {
+        if (!hasReadCallLogPermission()) return@withContext emptyList()
+
         val callLogs = mutableListOf<CallLogEntry>()
         val projection = arrayOf(
             CallLog.Calls._ID,
