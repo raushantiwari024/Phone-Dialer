@@ -1,10 +1,12 @@
 package com.raushan.phone
 
+import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -23,6 +25,12 @@ class MainActivity : ComponentActivity() {
         // State will be re-checked in onResume
     }
 
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        // Handle results if needed
+    }
+
     private var isDefaultState by mutableStateOf(false)
     private var bypassOnboarding by mutableStateOf(false)
 
@@ -34,6 +42,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             PhoneTheme {
+                LaunchedEffect(Unit) {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.READ_CONTACTS,
+                            Manifest.permission.READ_CALL_LOG,
+                            Manifest.permission.CALL_PHONE,
+                            Manifest.permission.READ_PHONE_STATE
+                        )
+                    )
+                }
+
                 if (isDefaultState || bypassOnboarding) {
                     MainScreen()
                 } else {
