@@ -21,13 +21,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    buildTypes {
-        release {
-            optimization {
-                enable = false
-            }
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -35,7 +28,37 @@ android {
     buildFeatures {
         compose = true
     }
+
+    signingConfigs {
+        create("release") {
+            // These values should be defined in your global gradle.properties or local.properties
+            // for security. If they aren't found, it will fall back to empty strings.
+            storeFile = file(project.findProperty("RELEASE_STORE_FILE") as String? ?: "release.jks")
+            storePassword = project.findProperty("RELEASE_STORE_PASSWORD") as String? ?: ""
+            keyAlias = project.findProperty("RELEASE_KEY_ALIAS") as String? ?: ""
+            keyPassword = project.findProperty("RELEASE_KEY_PASSWORD") as String? ?: ""
+        }
+    }
+
+    buildTypes {
+        release {
+            val isSigningConfigured = project.hasProperty("RELEASE_STORE_FILE")
+            signingConfig = if (isSigningConfigured) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+
+            isMinifyEnabled = true 
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
 }
+
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
