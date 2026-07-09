@@ -79,4 +79,17 @@ class ContactsRepository(private val context: Context) {
         }
         contact
     }
+
+    suspend fun getContactByNumber(number: String): Contact? = withContext(Dispatchers.IO) {
+        if (!hasReadContactsPermission()) return@withContext null
+        
+        val cleanTarget = number.replace(Regex("[^0-9+]"), "")
+        if (cleanTarget.isEmpty()) return@withContext null
+        
+        val allContacts = getContacts()
+        allContacts.find { 
+            val cleanContact = it.number.replace(Regex("[^0-9+]"), "")
+            cleanContact.endsWith(cleanTarget) || cleanTarget.endsWith(cleanContact)
+        }
+    }
 }

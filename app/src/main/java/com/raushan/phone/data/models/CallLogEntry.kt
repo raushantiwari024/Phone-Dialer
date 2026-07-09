@@ -5,5 +5,8 @@ data class CallLogEntry(
     val number: String,
     val date: Long,
     val duration: Long,
-    val type: Int
+    val type: Int,
+    val cachedName: String? = null,
+    val cachedNumberType: Int? = null,
+    val cachedNumberLabel: String? = null
 )

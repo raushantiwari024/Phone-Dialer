@@ -11,6 +11,10 @@ class TelecomHelper(private val context: Context) {
     private val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
 
     fun makeCall(phoneNumber: String) {
+        if (CallRepository.currentCalls.value.isNotEmpty()) {
+            Log.w("TelecomHelper", "A call is already in progress. Ignoring makeCall request.")
+            return
+        }
         try {
             val uri = Uri.fromParts("tel", phoneNumber, null)
             telecomManager.placeCall(uri, null)
