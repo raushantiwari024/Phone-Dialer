@@ -18,6 +18,13 @@ class CallLogRepository(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun hasWriteCallLogPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_CALL_LOG
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     suspend fun getCallLogs(): List<CallLogEntry> = withContext(Dispatchers.IO) {
         if (!hasReadCallLogPermission()) return@withContext emptyList()
 
@@ -27,7 +34,10 @@ class CallLogRepository(private val context: Context) {
             CallLog.Calls.NUMBER,
             CallLog.Calls.DATE,
             CallLog.Calls.DURATION,
-            CallLog.Calls.TYPE
+            CallLog.Calls.TYPE,
+            CallLog.Calls.CACHED_NAME,
+            CallLog.Calls.CACHED_NUMBER_TYPE,
+            CallLog.Calls.CACHED_NUMBER_LABEL
         )
         
         val cursor = context.contentResolver.query(
@@ -44,6 +54,9 @@ class CallLogRepository(private val context: Context) {
             val dateIndex = it.getColumnIndex(CallLog.Calls.DATE)
             val durationIndex = it.getColumnIndex(CallLog.Calls.DURATION)
             val typeIndex = it.getColumnIndex(CallLog.Calls.TYPE)
+            val nameIndex = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
+            val numberTypeIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
+            val numberLabelIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_LABEL)
             
             while (it.moveToNext()) {
                 val id = it.getLong(idIndex)
@@ -51,9 +64,63 @@ class CallLogRepository(private val context: Context) {
                 val date = it.getLong(dateIndex)
                 val duration = it.getLong(durationIndex)
                 val type = it.getInt(typeIndex)
-                callLogs.add(CallLogEntry(id, number, date, duration, type))
+                
+                val name = if (nameIndex >= 0) it.getString(nameIndex) else null
+                val numberType = if (numberTypeIndex >= 0 && !it.isNull(numberTypeIndex)) it.getInt(numberTypeIndex) else null
+                val numberLabel = if (numberLabelIndex >= 0) it.getString(numberLabelIndex) else null
+                
+                callLogs.add(
+                    CallLogEntry(
+                        id = id,
+                        number = number,
+                        date = date,
+                        duration = duration,
+                        type = type,
+                        cachedName = name,
+                        cachedNumberType = numberType,
+                        cachedNumberLabel = numberLabel
+                    )
+                )
             }
         }
         callLogs
+    }
+
+    suspend fun getCallLogsForNumber(targetNumber: String): List<CallLogEntry> {
+        val allLogs = getCallLogs()
+        val cleanTarget = targetNumber.replace(Regex("[^0-9+]"), "")
+        if (cleanTarget.isEmpty()) return emptyList()
+        return allLogs.filter { log ->
+            val cleanLog = log.number.replace(Regex("[^0-9+]"), "")
+            cleanLog.endsWith(cleanTarget) || cleanTarget.endsWith(cleanLog)
+        }
+    }
+
+    suspend fun deleteCallLog(id: Long): Boolean = withContext(Dispatchers.IO) {
+        if (!hasWriteCallLogPermission()) return@withContext false
+        try {
+            val deletedCount = context.contentResolver.delete(
+                CallLog.Calls.CONTENT_URI,
+                "${CallLog.Calls._ID} = ?",
+                arrayOf(id.toString())
+            )
+            deletedCount > 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun clearCallLogs(): Boolean = withContext(Dispatchers.IO) {
+        if (!hasWriteCallLogPermission()) return@withContext false
+        try {
+            val deletedCount = context.contentResolver.delete(
+                CallLog.Calls.CONTENT_URI,
+                null,
+                null
+            )
+            deletedCount > 0
+        } catch (e: Exception) {
+            false
+        }
     }
 }
