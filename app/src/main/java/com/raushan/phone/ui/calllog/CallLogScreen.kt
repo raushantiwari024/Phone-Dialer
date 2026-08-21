@@ -32,11 +32,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.raushan.phone.ui.incall.rememberContactPhoto
+import android.graphics.BitmapFactory
+import android.util.Log
+import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -52,7 +61,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun CallLogScreen(
+fun callLogScreen(
     viewModel: CallLogViewModel = viewModel(),
     onEntryClick: (CallLogEntry) -> Unit,
     onCallClick: (String) -> Unit,
@@ -146,14 +155,6 @@ fun CallLogScreen(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onSettingsClick()
-                                        showOptions = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Clear call history") },
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.clearAllHistory()
                                         showOptions = false
                                     }
                                 )
@@ -329,7 +330,7 @@ fun CallLogScreen(
                                         }
                                     }
                                 ) {
-                                    CallLogItem(
+                                    callLogItem(
                                         group = group,
                                         onClick = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -422,8 +423,9 @@ fun segmentedControl(
 }
 
 @OptIn(ExperimentalFoundationApi::class)
+@Suppress("DEPRECATION")
 @Composable
-fun CallLogItem(
+fun callLogItem(
     group: CallLogGroup,
     onClick: () -> Unit,
     onCallClick: () -> Unit,
@@ -442,6 +444,8 @@ fun CallLogItem(
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+
+    val photoBitmap = rememberContactPhoto(entry.photoUri)
 
     Box {
         Row(
@@ -474,7 +478,14 @@ fun CallLogItem(
                 }
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    if (isCorp) {
+                    if (photoBitmap != null) {
+                        Image(
+                            bitmap = photoBitmap,
+                            contentDescription = "Contact Photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else if (isCorp) {
                         Icon(
                             imageVector = Icons.Default.Apartment,
                             contentDescription = "Business",
@@ -634,7 +645,7 @@ private fun isBusiness(name: String?): Boolean {
     if (name == null) return false
     val lower = name.lowercase()
     return lower.contains("corp") || lower.contains("hq") || lower.contains("office") ||
-            lower.contains("service") || lower.contains("company") || lower.contains("inc.")
+        lower.contains("service") || lower.contains("company") || lower.contains("inc.")
 }
 
 private fun getMonogram(name: String?, number: String): String {

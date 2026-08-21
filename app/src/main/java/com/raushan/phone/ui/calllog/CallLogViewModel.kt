@@ -106,13 +106,6 @@ class CallLogViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun clearAllHistory() {
-        viewModelScope.launch {
-            if (repository.clearCallLogs()) {
-                _rawCallLogs.value = emptyList()
-            }
-        }
-    }
 
     private fun fetchCallLogs() {
         viewModelScope.launch {

@@ -37,8 +37,20 @@ class CallLogRepository(private val context: Context) {
             CallLog.Calls.TYPE,
             CallLog.Calls.CACHED_NAME,
             CallLog.Calls.CACHED_NUMBER_TYPE,
-            CallLog.Calls.CACHED_NUMBER_LABEL
+            CallLog.Calls.CACHED_NUMBER_LABEL,
+            CallLog.Calls.CACHED_PHOTO_URI
         )
+
+        val contactsRepository = ContactsRepository(context)
+        val contactsList = try {
+            contactsRepository.getContacts()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        
+        val contactsMap = contactsList.filter { it.photoUri != null }.associate { contact ->
+            contact.number.replace(Regex("[^0-9+]"), "") to contact.photoUri
+        }
         
         val cursor = context.contentResolver.query(
             CallLog.Calls.CONTENT_URI,
@@ -57,6 +69,7 @@ class CallLogRepository(private val context: Context) {
             val nameIndex = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
             val numberTypeIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
             val numberLabelIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_LABEL)
+            val photoUriIndex = it.getColumnIndex(CallLog.Calls.CACHED_PHOTO_URI)
             
             while (it.moveToNext()) {
                 val id = it.getLong(idIndex)
@@ -69,6 +82,20 @@ class CallLogRepository(private val context: Context) {
                 val numberType = if (numberTypeIndex >= 0 && !it.isNull(numberTypeIndex)) it.getInt(numberTypeIndex) else null
                 val numberLabel = if (numberLabelIndex >= 0) it.getString(numberLabelIndex) else null
                 
+                val cleanLogNum = number.replace(Regex("[^0-9+]"), "")
+                var resolvedPhoto = contactsMap[cleanLogNum]
+                if (resolvedPhoto == null && cleanLogNum.isNotEmpty()) {
+                    resolvedPhoto = contactsList.find { contact ->
+                        val cleanContact = contact.number.replace(Regex("[^0-9+]"), "")
+                        if (cleanContact.length >= 7 && cleanLogNum.length >= 7) {
+                            cleanContact.endsWith(cleanLogNum.takeLast(7)) || cleanLogNum.endsWith(cleanContact.takeLast(7))
+                        } else {
+                            cleanContact == cleanLogNum
+                        }
+                    }?.photoUri
+                }
+                val photoUri = resolvedPhoto ?: (if (photoUriIndex >= 0) it.getString(photoUriIndex) else null)
+                
                 callLogs.add(
                     CallLogEntry(
                         id = id,
@@ -78,7 +105,8 @@ class CallLogRepository(private val context: Context) {
                         type = type,
                         cachedName = name,
                         cachedNumberType = numberType,
-                        cachedNumberLabel = numberLabel
+                        cachedNumberLabel = numberLabel,
+                        photoUri = photoUri
                     )
                 )
             }
@@ -103,20 +131,6 @@ class CallLogRepository(private val context: Context) {
                 CallLog.Calls.CONTENT_URI,
                 "${CallLog.Calls._ID} = ?",
                 arrayOf(id.toString())
-            )
-            deletedCount > 0
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    suspend fun clearCallLogs(): Boolean = withContext(Dispatchers.IO) {
-        if (!hasWriteCallLogPermission()) return@withContext false
-        try {
-            val deletedCount = context.contentResolver.delete(
-                CallLog.Calls.CONTENT_URI,
-                null,
-                null
             )
             deletedCount > 0
         } catch (e: Exception) {
