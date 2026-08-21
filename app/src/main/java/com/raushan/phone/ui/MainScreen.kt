@@ -80,21 +80,9 @@ fun mainScreen(
     val callState by inCallViewModel.callState.collectAsStateWithLifecycle()
     val isExpanded by inCallViewModel.isCallScreenExpanded.collectAsStateWithLifecycle()
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val state = callState
-                if (state == Call.STATE_ACTIVE || state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || state == Call.STATE_HOLDING) {
-                    inCallViewModel.setCallScreenExpanded(false)
-                }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
+    // An ON_RESUME observer used to force the call screen closed here. That meant tapping the ongoing
+    // call notification — an explicit request for the full call screen — reliably landed the user on
+    // the thin banner instead.
 
     val items = listOf(
         Screen.CallLog,
@@ -108,7 +96,7 @@ fun mainScreen(
                 val callerName by inCallViewModel.callerName.collectAsStateWithLifecycle()
                 val callDuration by inCallViewModel.callDuration.collectAsStateWithLifecycle()
 
-                if (activeCall != null && !isExpanded && (callState == Call.STATE_ACTIVE || callState == Call.STATE_DIALING || callState == Call.STATE_CONNECTING || callState == Call.STATE_HOLDING)) {
+                if (activeCall != null && !isExpanded && callState.isOngoing) {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -291,9 +279,13 @@ fun mainScreen(
 
         // Call UI Overlay
         if (activeCall != null) {
-            if (callState == Call.STATE_RINGING) {
+            if (callState.isRinging) {
+                // Back must not escape a ringing call, which it previously did — there was no handler
+                // on this branch, so the press fell through to the nav host.
+                BackHandler(enabled = true) {}
+
                 incomingCallScreen(viewModel = inCallViewModel)
-            } else if (isExpanded && (callState == Call.STATE_ACTIVE || callState == Call.STATE_DIALING || callState == Call.STATE_CONNECTING || callState == Call.STATE_HOLDING)) {
+            } else if (isExpanded && callState.isOngoing) {
 
                 // Back button minimization handler
                 BackHandler(enabled = true) {
@@ -305,5 +297,3 @@ fun mainScreen(
         }
     }
 }
-
-private const val PredefinedCallState = -1

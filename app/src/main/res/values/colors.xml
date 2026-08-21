@@ -7,4 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!--
+      Notification accent. Must be a framework colour resource because NotificationCompat cannot take
+      a Compose Color. Keep in sync with ElectricBlue in ui/theme/Color.kt.
+    -->
+    <color name="call_notification_accent">#FF3399FF</color>
 </resources>

@@ -86,16 +86,72 @@ class ContactsRepository(private val context: Context) {
         contact
     }
 
+    /**
+     * Looks up a contact by phone number.
+     *
+     * Uses [ContactsContract.PhoneLookup], an indexed and country-aware provider query. The previous
+     * implementation loaded the entire phone table via [getContacts] and linear-scanned it with a
+     * `Regex` recompiled on every element — and it ran two or three times per incoming call, at the
+     * most latency-sensitive moment in the app.
+     *
+     * The raw number is passed straight through: `PhoneLookup` applies its own E.164 and min-match
+     * normalisation, which is more correct than bidirectional `endsWith` on a digit-stripped string.
+     * That old comparison had no minimum-length guard, so a short number like `911` matched any
+     * contact ending in those digits.
+     */
     suspend fun getContactByNumber(number: String): Contact? = withContext(Dispatchers.IO) {
         if (!hasReadContactsPermission()) return@withContext null
-        
-        val cleanTarget = number.replace(Regex("[^0-9+]"), "")
-        if (cleanTarget.isEmpty()) return@withContext null
-        
-        val allContacts = getContacts()
-        allContacts.find { 
-            val cleanContact = it.number.replace(Regex("[^0-9+]"), "")
-            cleanContact.endsWith(cleanTarget) || cleanTarget.endsWith(cleanContact)
-        }
+        if (number.replace(PHONE_CLEAN_REGEX, "").isEmpty()) return@withContext null
+
+        val uri = ContactsContract.PhoneLookup.CONTENT_FILTER_URI
+            .buildUpon()
+            .appendPath(number)
+            .apply {
+                if (number.contains(SIP_MARKER)) {
+                    appendQueryParameter(
+                        ContactsContract.PhoneLookup.QUERY_PARAMETER_SIP_ADDRESS,
+                        true.toString(),
+                    )
+                }
+            }
+            .build()
+
+        val projection = arrayOf(
+            ContactsContract.PhoneLookup.CONTACT_ID,
+            ContactsContract.PhoneLookup.DISPLAY_NAME,
+            ContactsContract.PhoneLookup.NUMBER,
+            ContactsContract.PhoneLookup.PHOTO_URI,
+            ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI,
+        )
+
+        runCatching {
+            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+
+                val idIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.CONTACT_ID)
+                val nameIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                val numberIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.NUMBER)
+                val photoIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_URI)
+                val thumbnailIndex =
+                    cursor.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI)
+
+                val name = nameIndex.takeIf { it >= 0 }?.let(cursor::getString)
+                    ?: return@use null
+
+                Contact(
+                    id = idIndex.takeIf { it >= 0 }?.let(cursor::getLong) ?: 0L,
+                    name = name,
+                    number = numberIndex.takeIf { it >= 0 }?.let(cursor::getString) ?: number,
+                    photoUri = photoIndex.takeIf { it >= 0 }?.let(cursor::getString)
+                        ?: thumbnailIndex.takeIf { it >= 0 }?.let(cursor::getString),
+                )
+            }
+        }.getOrNull()
+    }
+
+    private companion object {
+        /** Precompiled — the old code rebuilt this on every comparison. */
+        private val PHONE_CLEAN_REGEX = Regex("[^0-9+]")
+        private const val SIP_MARKER = "@"
     }
 }

@@ -22,13 +22,29 @@
     <string name="end_call_label">End Call</string>
     <string name="cannot_open_messages">Cannot open messages</string>
 
+    <!-- Caller labels -->
+    <string name="caller_private_number">Private number</string>
+    <string name="caller_payphone">Payphone</string>
+    <string name="caller_emergency">Emergency call</string>
+
+    <!-- Multi-call actions -->
+    <string name="resume_label">Resume</string>
+    <string name="swap_label">Swap</string>
+    <string name="merge_label">Merge</string>
+    <string name="answer_and_hold_label">Hold &amp; Accept</string>
+    <string name="answer_and_end_label">End &amp; Accept</string>
+
     <!-- Notification -->
     <string name="incoming_calls_channel_name">Incoming Calls</string>
     <string name="incoming_calls_channel_description">Shows notifications for incoming phone calls</string>
     <string name="notification_incoming_call">Incoming Call</string>
-    <string name="active_calls_channel_name">Active Calls</string>
-    <string name="active_calls_channel_description">Shows notification for active call</string>
-    <string name="notification_active_call">Active Call</string>
+    <string name="ongoing_calls_channel_name">Ongoing Calls</string>
+    <string name="ongoing_calls_channel_description">Shows an ongoing notification while you are on a call</string>
+    <string name="notification_ongoing_call">Ongoing call</string>
+    <string name="notification_call_on_hold">On hold</string>
+    <string name="notification_call_dialing">Dialing…</string>
+    <string name="mute_on_label">Mute</string>
+    <string name="mute_off_label">Unmute</string>
     <string name="speaker_on_label">Speaker On</string>
     <string name="speaker_off_label">Speaker Off</string>
     <string name="hang_up_label">Hang Up</string>

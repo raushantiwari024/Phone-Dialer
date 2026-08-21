@@ -1,155 +1,159 @@
 package com.raushan.phone.ui.incall
 
 import android.app.Application
-import android.telecom.Call
-import android.telecom.CallAudioState
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.raushan.phone.data.ContactsRepository
 import com.raushan.phone.telecom.CallRepository
-import com.raushan.phone.telecom.MyInCallService
+import com.raushan.phone.telecom.TelecomHelper
+import com.raushan.phone.telecom.model.CallDuration
+import com.raushan.phone.telecom.model.CallModel
+import com.raushan.phone.telecom.model.CallSessionState
+import com.raushan.phone.telecom.model.CallState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.util.Locale
-import kotlin.time.Duration.Companion.milliseconds
 
-@Suppress("DEPRECATION")
+/**
+ * In-call state for the current UI.
+ *
+ * A projection of [CallRepository] — it registers no `Call.Callback` of its own and keeps no optimistic
+ * audio state. The previous version did both: it registered an anonymous callback inside a flow
+ * collector and never unregistered it, and it flipped local mute and speaker booleans that were never
+ * reconciled with the real audio route.
+ *
+ * The nine separate flows here are retained so the existing screens keep working while the UI is
+ * migrated to a single immutable state wrapper in a later step.
+ */
 class InCallViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val contactsRepository = ContactsRepository(application)
+    private val telecomHelper = TelecomHelper(application)
 
-    val activeCall: StateFlow<Call?> = CallRepository.currentCalls
-        .map { it.firstOrNull() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    /**
+     * `Eagerly`, not `WhileSubscribed`. The old `WhileSubscribed(5000)` restarted the upstream on every
+     * background/foreground cycle, and because the collector registered a callback each time, those
+     * accumulated and triggered a timer cancel/restart storm on every state change.
+     */
+    private val session: StateFlow<CallSessionState> = CallRepository.state
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CallSessionState.EMPTY)
 
-    private val _callState = MutableStateFlow(Call.STATE_DISCONNECTED)
-    val callState = _callState.asStateFlow()
+    val activeCall: StateFlow<CallModel?> = session
+        .map { it.primaryCall }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    private val _callerNumber = MutableStateFlow("")
-    val callerNumber = _callerNumber.asStateFlow()
+    val callState: StateFlow<CallState> = session
+        .map { it.primaryCall?.state ?: CallState.DISCONNECTED }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CallState.DISCONNECTED)
 
-    private val _callerName = MutableStateFlow("")
-    val callerName = _callerName.asStateFlow()
+    val callerNumber: StateFlow<String> = session
+        .map { it.primaryCall?.number.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    private val _callDuration = MutableStateFlow(DEFAULT_DURATION)
-    val callDuration = _callDuration.asStateFlow()
+    /**
+     * Already resolved upstream, so there is no "Loading…" sentinel to compare against any more. The
+     * old code compared a ViewModel string constant against a *string resource* to decide whether to
+     * draw a monogram, which broke under localisation.
+     */
+    val callerName: StateFlow<String> = session
+        .map { it.primaryCall?.displayName.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    private val _callerPhotoUri = MutableStateFlow<String?>(null)
-    val callerPhotoUri = _callerPhotoUri.asStateFlow()
+    val callerPhotoUri: StateFlow<String?> = session
+        .map { it.primaryCall?.photoUri }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val isMuted: StateFlow<Boolean> = session
+        .map { it.audio.isMuted }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val isSpeakerOn: StateFlow<Boolean> = session
+        .map { it.audio.isSpeakerOn }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _callDuration = MutableStateFlow(CallDuration.ZERO)
+    val callDuration: StateFlow<String> = _callDuration.asStateFlow()
 
     private val _isCallScreenExpanded = MutableStateFlow(true)
-    val isCallScreenExpanded = _isCallScreenExpanded.asStateFlow()
-
-    private val _isMuted = MutableStateFlow(false)
-    val isMuted = _isMuted.asStateFlow()
-
-    private val _isSpeakerOn = MutableStateFlow(false)
-    val isSpeakerOn = _isSpeakerOn.asStateFlow()
+    val isCallScreenExpanded: StateFlow<Boolean> = _isCallScreenExpanded.asStateFlow()
 
     private var timerJob: Job? = null
 
     init {
-        activeCall.onEach { call ->
-            timerJob?.cancel()
-            _callDuration.value = DEFAULT_DURATION
-            
-            call?.let {
-                val number = it.details?.handle?.schemeSpecificPart ?: ""
-                _callerNumber.value = number
-                _callerName.value = CALLER_LOADING
-                _isCallScreenExpanded.value = true
-                
-                // Fetch contact name & photo asynchronously
-                viewModelScope.launch {
-                    val contact = contactsRepository.getContactByNumber(number)
-                    _callerName.value = contact?.name ?: CALLER_UNKNOWN
-                    _callerPhotoUri.value = contact?.photoUri
-                }
+        // Re-expand for each new call, keyed on the call id so a state change within one call does not
+        // yank the screen back open.
+        session
+            .map { it.primaryCall?.id }
+            .distinctUntilChanged()
+            .onEach { id -> if (id != null) _isCallScreenExpanded.value = true }
+            .launchIn(viewModelScope)
 
-                _callState.value = it.state
-                checkAndManageTimer(it.state)
-                
-                it.registerCallback(object : Call.Callback() {
-                    override fun onStateChanged(call: Call, state: Int) {
-                        _callState.value = state
-                        checkAndManageTimer(state)
-                    }
-                })
-            } ?: run {
-                _callerNumber.value = ""
-                _callerName.value = ""
-                _callerPhotoUri.value = null
-                _callState.value = Call.STATE_DISCONNECTED
-                _isMuted.value = false
-                _isSpeakerOn.value = false
-            }
-        }.launchIn(viewModelScope)
+        session
+            .map { it.primaryCall?.takeIf { call -> call.state == CallState.ACTIVE }?.connectTimeMillis }
+            .distinctUntilChanged()
+            .onEach(::restartTimer)
+            .launchIn(viewModelScope)
     }
 
-    private fun checkAndManageTimer(state: Int) {
-        if (state == Call.STATE_ACTIVE) {
-            startTimer()
-        } else {
-            timerJob?.cancel()
-        }
-    }
-
-    private fun startTimer() {
+    private fun restartTimer(connectTimeMillis: Long?) {
         timerJob?.cancel()
-        val currentCall = activeCall.value ?: return
+        if (connectTimeMillis == null || connectTimeMillis <= 0L) {
+            _callDuration.value = CallDuration.ZERO
+            return
+        }
         timerJob = viewModelScope.launch {
             while (true) {
-                val connectTime = currentCall.details?.connectTimeMillis ?: 0L
-                val now = System.currentTimeMillis()
-                val elapsedMs = if (connectTime > 0L) now - connectTime else 0L
-                val seconds = elapsedMs / 1000
-                _callDuration.value = String.format(
-                    Locale.getDefault(),
-                    DURATION_FORMAT,
-                    seconds / 60,
-                    seconds % 60
-                )
-                delay(TIMER_INTERVAL_MS.milliseconds)
+                _callDuration.value =
+                    CallDuration.since(connectTimeMillis, System.currentTimeMillis())
+                delay(TIMER_INTERVAL_MS)
             }
         }
     }
 
     fun endCall() {
-        activeCall.value?.disconnect()
+        val session = session.value
+        val target = session.ringingCall ?: session.primaryCall ?: return
+        if (target.isRinging) {
+            telecomHelper.rejectCall(target.id)
+        } else {
+            telecomHelper.endCall(target.id)
+        }
     }
 
     fun answerCall() {
-        activeCall.value?.answer(0)
+        val session = session.value
+        val ringing = session.ringingCall ?: return
+        when {
+            session.mustEndActiveToAnswer -> telecomHelper.answerAndEndActive(ringing.id)
+            else -> telecomHelper.answerCall(ringing.id)
+        }
     }
 
     fun toggleMute() {
-        val nextMute = !_isMuted.value
-        _isMuted.value = nextMute
-        MyInCallService.instance?.setMuted(nextMute)
+        telecomHelper.toggleMute()
     }
 
     fun toggleSpeaker() {
-        val nextSpeaker = !_isSpeakerOn.value
-        _isSpeakerOn.value = nextSpeaker
-        val route = if (nextSpeaker) {
-            CallAudioState.ROUTE_SPEAKER
-        } else {
-            CallAudioState.ROUTE_WIRED_OR_EARPIECE
-        }
-        MyInCallService.instance?.setAudioRoute(route)
+        telecomHelper.toggleSpeaker()
     }
 
     fun setCallScreenExpanded(expanded: Boolean) {
         _isCallScreenExpanded.value = expanded
     }
 
-    companion object {
-        const val CALLER_LOADING = "Loading\u2026"
-        const val CALLER_UNKNOWN = "Unknown"
-        private const val DEFAULT_DURATION = "00:00"
-        private const val DURATION_FORMAT = "%02d:%02d"
+    override fun onCleared() {
+        timerJob?.cancel()
+        super.onCleared()
+    }
+
+    private companion object {
         private const val TIMER_INTERVAL_MS = 1000L
     }
 }

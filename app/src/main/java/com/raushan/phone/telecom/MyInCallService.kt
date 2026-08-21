@@ -1,362 +1,386 @@
 package com.raushan.phone.telecom
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Context
+import android.bluetooth.BluetoothDevice
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import com.raushan.phone.MainActivity
-import com.raushan.phone.R
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.raushan.phone.data.ContactsRepository
+import com.raushan.phone.telecom.model.AudioRoute
+import com.raushan.phone.telecom.model.BluetoothDeviceModel
+import com.raushan.phone.telecom.model.CallAudioModel
+import com.raushan.phone.telecom.model.CallSessionEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 
-@Suppress("DEPRECATION")
-class MyInCallService : InCallService() {
+/**
+ * The bridge between Telecom and the app.
+ *
+ * Its whole job is: own the `Call.Callback` registrations, map framework calls into immutable snapshots
+ * for [CallRepository], publish audio state, and post the call notification. It holds no UI state and
+ * no business logic.
+ *
+ * This is a **bind-only** service. It used to also handle notification actions through
+ * `onStartCommand` + `PendingIntent.getService`, which meant Telecom bound it *and* the notification
+ * started it. Nothing ever called `stopSelf()`, so the started state outlived the binding: `onDestroy`
+ * never ran, `Call.Callback`s stayed registered, and notifications could not be cancelled. Actions now
+ * go to [CallActionReceiver] and `onStartCommand` is gone.
+ */
+class MyInCallService : InCallService(), InCallController {
+
+    /**
+     * Cancelled in [onDestroy], unlike the ad-hoc `CoroutineScope(Dispatchers.IO)` this replaces.
+     * `Dispatchers.Main.immediate` keeps all repository mutation single-threaded.
+     */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Exactly one callback per call. No other class in the app may register one. */
+    private val callbacks = HashMap<Call, Call.Callback>()
+
+    private val contactJobs = HashMap<String, Job>()
+
+    /** Service-local, not part of [CallModel]: a Bitmap is mutable and would break `@Immutable`. */
+    private val avatarCache = HashMap<String, IconCompat>()
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private lateinit var mapper: CallModelMapper
+    private lateinit var contactsRepository: ContactsRepository
+    private lateinit var notifications: CallNotificationManager
+    private lateinit var notificationManager: NotificationManagerCompat
+
+    private var foregroundNotificationId: Int? = null
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
+        mapper = CallModelMapper(this)
+        contactsRepository = ContactsRepository(this)
+        notifications = CallNotificationManager(this)
+        notificationManager = NotificationManagerCompat.from(this)
+        CallRepository.attachController(this)
+        CallRepository.setServiceConnected(true)
+    }
+
+    /**
+     * Telecom unbinding is the reliable teardown signal; `onDestroy` may lag behind it. Both call
+     * [teardown], which is idempotent.
+     */
+    override fun onUnbind(intent: Intent?): Boolean {
+        teardown()
+        return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        teardown()
+        serviceScope.cancel()
         super.onDestroy()
-        instance = null
-        cancelNotifications()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_ANSWER -> {
-                val call = CallRepository.currentCalls.value.firstOrNull()
-                call?.answer(0)
-                cancelIncomingCallNotificationOnly()
-                
-                // Launch MainActivity to show active call UI in foreground
-                val launchIntent = Intent(this, MainActivity::class.java).apply {
-                    this.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                startActivity(launchIntent)
-            }
-            ACTION_DECLINE -> {
-                val call = CallRepository.currentCalls.value.firstOrNull()
-                call?.disconnect()
-                cancelNotifications()
-            }
-            ACTION_TOGGLE_SPEAKER -> {
-                val currentRoute = callAudioState?.route ?: CallAudioState.ROUTE_WIRED_OR_EARPIECE
-                val isSpeakerOn = (currentRoute == CallAudioState.ROUTE_SPEAKER)
-                val newRoute = if (isSpeakerOn) {
-                    CallAudioState.ROUTE_WIRED_OR_EARPIECE
-                } else {
-                    CallAudioState.ROUTE_SPEAKER
-                }
-                setAudioRoute(newRoute)
-                
-                // Update notification immediately with new route text
-                val call = CallRepository.currentCalls.value.firstOrNull()
-                if (call != null) {
-                    updateCallNotification(call)
-                }
-            }
+    private fun teardown() {
+        callbacks.forEach { (call, callback) ->
+            runCatching { call.unregisterCallback(callback) }
         }
-        return super.onStartCommand(intent, flags, startId)
+        callbacks.clear()
+        contactJobs.values.forEach(Job::cancel)
+        contactJobs.clear()
+        avatarCache.clear()
+        stopCallForeground()
+        CallRepository.detachController(this)
+        CallRepository.clear()
     }
 
-    private val callCallback = object : Call.Callback() {
-        override fun onStateChanged(call: Call, state: Int) {
-            super.onStateChanged(call, state)
-            Log.d(TAG, "onStateChanged: $call, state: ${callStateToString(state)}")
-            updateCallNotification(call)
-        }
-    }
+    // --- Telecom callbacks ---
 
-    @Suppress("DEPRECATION")
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
-        Log.d(TAG, "onCallAdded: $call")
-        call.registerCallback(callCallback)
-        CallRepository.addCall(call)
-        updateCallNotification(call)
+        val id = CallRepository.assignId(call)
+        Log.d(TAG, "onCallAdded: $id")
+
+        val callback = createCallback()
+        callbacks[call] = callback
+        // Explicit main-thread handler so every repository write happens on one thread.
+        call.registerCallback(callback, mainHandler)
+
+        republish(call)
+        resolveContact(call, id)
+        refreshNotification()
     }
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
-        Log.d(TAG, "onCallRemoved: $call")
-        call.unregisterCallback(callCallback)
+        val id = CallRepository.idOf(call)
+        Log.d(TAG, "onCallRemoved: $id")
+
+        callbacks.remove(call)?.let { runCatching { call.unregisterCallback(it) } }
+        id?.let {
+            contactJobs.remove(it)?.cancel()
+            avatarCache.remove(it)
+        }
         CallRepository.removeCall(call)
-        cancelNotifications()
+        refreshNotification()
     }
 
-    @Suppress("OVERRIDE_DEPRECATION")
+    /**
+     * The authoritative audio state. Previously this only refreshed the notification and never
+     * published, which is why the in-app mute and speaker buttons drifted out of sync with the real
+     * route whenever audio changed from the notification or a Bluetooth headset.
+     */
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onCallAudioStateChanged(audioState: CallAudioState?) {
         super.onCallAudioStateChanged(audioState)
-        Log.d(TAG, "onCallAudioStateChanged: $audioState")
-        val call = CallRepository.currentCalls.value.firstOrNull()
-        if (call != null) {
-            updateCallNotification(call)
-        }
+        CallRepository.setAudio(audioModelOf(audioState))
+        refreshNotification()
     }
 
-    fun onActivityStateChanged(isForeground: Boolean) {
-        val call = CallRepository.currentCalls.value.firstOrNull() ?: return
-        val state = call.details?.state ?: call.state
-        if (state == Call.STATE_RINGING && !isForeground) {
-            // Re-post incoming call notification if activity goes to background while ringing
-            showIncomingCallNotification(call)
-        }
+    override fun onCanAddCallChanged(canAddCall: Boolean) {
+        super.onCanAddCallChanged(canAddCall)
+        CallRepository.setCanAddCall(canAddCall)
     }
 
-    private fun updateCallNotification(call: Call) {
-        val state = call.details?.state ?: call.state
-        if (state == Call.STATE_RINGING) {
-            showIncomingCallNotification(call)
-        } else if (state == Call.STATE_ACTIVE || state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || state == Call.STATE_HOLDING) {
-            showActiveCallNotification(call)
-        } else {
-            cancelNotifications()
-        }
+    override fun onSilenceRinger() {
+        super.onSilenceRinger()
+        CallRepository.setRingerSilenced(true)
+        CallRepository.emitEvent(CallSessionEvent.RingerSilenced)
+        refreshNotification()
     }
 
-    private fun showIncomingCallNotification(call: Call) {
-        val number = call.details?.handle?.schemeSpecificPart ?: ""
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID_INCOMING_CALLS,
-                getString(R.string.incoming_calls_channel_name),
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = getString(R.string.incoming_calls_channel_description)
-                enableLights(true)
-                enableVibration(true)
+    override fun onBringToForeground(showDialpad: Boolean) {
+        super.onBringToForeground(showDialpad)
+        CallRepository.emitEvent(CallSessionEvent.ShowInCallUi(showDialpad))
+        val callId = CallRepository.state.value.primaryCall?.id ?: return
+        // Best effort only. Background activity starts are restricted, so the full-screen intent on
+        // the notification is the reliable path; this is just the optimisation.
+        runCatching { startActivity(InCallIntents.callUi(this, callId, showDialpad)) }
+            .onFailure { Log.d(TAG, "Could not bring call UI forward directly", it) }
+    }
+
+    /**
+     * One callback instance per call, dispatching on the call it was registered for.
+     *
+     * `onDetailsChanged` matters as much as `onStateChanged` and was previously missing: capabilities,
+     * connect time and the caller name all arrive through it, which is why hold and merge affordances
+     * could never be enabled correctly.
+     */
+    private fun createCallback(): Call.Callback = object : Call.Callback() {
+        override fun onStateChanged(call: Call, state: Int) = republish(call)
+
+        override fun onDetailsChanged(call: Call, details: Call.Details) = republish(call)
+
+        override fun onChildrenChanged(call: Call, children: MutableList<Call>) = republish(call)
+
+        override fun onParentChanged(call: Call, parent: Call?) = republish(call)
+
+        override fun onConferenceableCallsChanged(
+            call: Call,
+            conferenceableCalls: MutableList<Call>,
+        ) = republish(call)
+
+        override fun onCannedTextResponsesLoaded(
+            call: Call,
+            cannedTextResponses: MutableList<String>,
+        ) = republish(call)
+
+        override fun onPostDialWait(call: Call, remainingPostDialSequence: String) {
+            CallRepository.idOf(call)?.let {
+                CallRepository.emitEvent(
+                    CallSessionEvent.PostDialWait(it, remainingPostDialSequence),
+                )
             }
-            notificationManager.createNotificationChannel(channel)
         }
-        
-        // Intent to open MainActivity on click
-        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+
+        override fun onConnectionEvent(call: Call, event: String, extras: android.os.Bundle?) {
+            CallRepository.idOf(call)?.let {
+                CallRepository.emitEvent(CallSessionEvent.ConnectionEvent(it, event))
+            }
         }
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            fullScreenIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Answer intent
-        val answerIntent = Intent(this, MyInCallService::class.java).apply {
-            action = ACTION_ANSWER
+
+        override fun onCallDestroyed(call: Call) {
+            callbacks.remove(call)?.let { runCatching { call.unregisterCallback(it) } }
         }
-        val answerPendingIntent = PendingIntent.getService(
-            this,
-            1,
-            answerIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Decline intent
-        val declineIntent = Intent(this, MyInCallService::class.java).apply {
-            action = ACTION_DECLINE
+    }
+
+    /** Re-maps one call and publishes. Every callback funnels through here. */
+    private fun republish(call: Call) {
+        val id = CallRepository.idOf(call) ?: CallRepository.assignId(call)
+        val contact = CallRepository.modelOf(id)?.let { existing ->
+            existing.contactId?.let {
+                com.raushan.phone.data.models.Contact(
+                    id = it,
+                    name = existing.displayName,
+                    number = existing.number,
+                    photoUri = existing.photoUri,
+                )
+            }
         }
-        val declinePendingIntent = PendingIntent.getService(
-            this,
-            2,
-            declineIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Build notification
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID_INCOMING_CALLS)
-            .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle(getString(R.string.notification_incoming_call))
-            .setContentText(number)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            // Left Action: Decline/Reject
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                getString(R.string.decline_label),
-                declinePendingIntent
-            )
-            // Right Action: Answer/Accept
-            .addAction(
-                android.R.drawable.ic_menu_call,
-                getString(R.string.answer_label),
-                answerPendingIntent
-            )
-            
-        notificationManager.notify(NOTIFICATION_ID, builder.build())
-        
-        // Asynchronously update notification with contact's name if resolved
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val repository = ContactsRepository(this@MyInCallService)
-                val contact = repository.getContactByNumber(number)
-                if (contact != null) {
-                    builder.setContentTitle(contact.name)
-                    notificationManager.notify(NOTIFICATION_ID, builder.build())
+        CallRepository.putCall(call, mapper.map(call, id, contact, CallRepository::idOf))
+        refreshNotification()
+    }
+
+    /**
+     * Resolves the caller's contact exactly once per call.
+     *
+     * Was previously done three times per call — once in the ViewModel and once in each notification
+     * builder — each time scanning the whole contacts table.
+     */
+    private fun resolveContact(call: Call, id: String) {
+        val model = CallRepository.modelOf(id) ?: return
+        if (!model.hasDisplayableNumber || model.isEmergency) return
+
+        contactJobs[id]?.cancel()
+        contactJobs[id] = serviceScope.launch {
+            val contact = runCatching { contactsRepository.getContactByNumber(model.number) }
+                .onFailure { Log.e(TAG, "Contact lookup failed", it) }
+                .getOrNull() ?: return@launch
+
+            if (!isActive) return@launch
+            // The call may have ended while we were looking up. Bail rather than reviving it.
+            if (CallRepository.rawCall(id) == null) return@launch
+
+            contact.photoUri?.let { uri -> loadAvatar(uri)?.let { avatarCache[id] = it } }
+
+            if (!isActive || CallRepository.rawCall(id) == null) return@launch
+            CallRepository.putCall(call, mapper.map(call, id, contact, CallRepository::idOf))
+            refreshNotification()
+        }
+    }
+
+    private suspend fun loadAvatar(photoUri: String): IconCompat? =
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            runCatching {
+                contentResolver.openInputStream(Uri.parse(photoUri))?.use { stream ->
+                    BitmapFactory.decodeStream(stream)?.let(IconCompat::createWithAdaptiveBitmap)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error looking up contact name for notification", e)
+            }.getOrNull()
+        }
+
+    // --- notifications ---
+
+    private fun refreshNotification() {
+        val state = CallRepository.state.value
+        val avatar = state.notificationCall?.id?.let(avatarCache::get)
+        when (val request = notifications.render(state, avatar)) {
+            is CallNotificationManager.Request.Post -> post(request)
+            CallNotificationManager.Request.Dismiss -> stopCallForeground()
+        }
+    }
+
+    private fun post(request: CallNotificationManager.Request.Post) {
+        val current = foregroundNotificationId
+        when {
+            current == null -> startCallForeground(request.id, request.notification)
+
+            current == request.id ->
+                runCatching { notificationManager.notify(request.id, request.notification) }
+
+            // Incoming -> ongoing handover. Post the new one *before* cancelling the old, so the
+            // foreground service is never momentarily without a notification and the shade does not
+            // flicker. The old code cancelled first.
+            else -> {
+                startCallForeground(request.id, request.notification)
+                runCatching { notificationManager.cancel(current) }
             }
         }
+        foregroundNotificationId = request.id
     }
 
-    private fun showActiveCallNotification(call: Call) {
-        val number = call.details?.handle?.schemeSpecificPart ?: ""
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID_ACTIVE_CALLS,
-                getString(R.string.active_calls_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getString(R.string.active_calls_channel_description)
-                enableLights(false)
-                enableVibration(false)
-                setShowBadge(false)
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-        
-        // Intent to open MainActivity on click
-        val contentIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val contentPendingIntent = PendingIntent.getActivity(
-            this,
-            3,
-            contentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Decline intent (Hang Up)
-        val declineIntent = Intent(this, MyInCallService::class.java).apply {
-            action = ACTION_DECLINE
-        }
-        val declinePendingIntent = PendingIntent.getService(
-            this,
-            4,
-            declineIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Speaker toggle intent
-        val speakerIntent = Intent(this, MyInCallService::class.java).apply {
-            action = ACTION_TOGGLE_SPEAKER
-        }
-        val speakerPendingIntent = PendingIntent.getService(
-            this,
-            5,
-            speakerIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        val currentRoute = callAudioState?.route ?: CallAudioState.ROUTE_WIRED_OR_EARPIECE
-        val isSpeakerOn = (currentRoute == CallAudioState.ROUTE_SPEAKER)
-        val speakerLabel = if (isSpeakerOn) {
-            getString(R.string.speaker_off_label)
-        } else {
-            getString(R.string.speaker_on_label)
-        }
-        
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID_ACTIVE_CALLS)
-            .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle(getString(R.string.notification_active_call))
-            .setContentText(number)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setOngoing(true)
-            .setContentIntent(contentPendingIntent)
-            
-        // Use system chronometer to display call duration seconds automatically
-        val connectTime = call.details?.connectTimeMillis ?: 0L
-        if (connectTime > 0L) {
-            builder.setWhen(connectTime)
-            builder.setUsesChronometer(true)
-        }
-        
-        // Add Speaker toggle and Hang up actions
-        builder.addAction(
-            android.R.drawable.ic_btn_speak_now,
-            speakerLabel,
-            speakerPendingIntent
-        )
-        builder.addAction(
-            android.R.drawable.ic_menu_close_clear_cancel,
-            getString(R.string.hang_up_label),
-            declinePendingIntent
-        )
-        
-        // Cancel incoming call notification first to prevent overlap
-        notificationManager.cancel(NOTIFICATION_ID)
-        notificationManager.notify(NOTIFICATION_ID_ACTIVE, builder.build())
-        
-        // Asynchronously update contact name if resolved
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val repository = ContactsRepository(this@MyInCallService)
-                val contact = repository.getContactByNumber(number)
-                if (contact != null) {
-                    builder.setContentTitle(contact.name)
-                    notificationManager.notify(NOTIFICATION_ID_ACTIVE, builder.build())
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error looking up contact name for notification", e)
-            }
+    private fun startCallForeground(id: Int, notification: android.app.Notification) {
+        try {
+            // Service.startForeground with a type is API 29, so it is always available at minSdk 30.
+            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+        } catch (e: Exception) {
+            // A denied foreground start must never take down a call. Fall back to a plain post.
+            Log.w(TAG, "startForeground denied; posting without foreground", e)
+            runCatching { notificationManager.notify(id, notification) }
         }
     }
 
-    private fun cancelIncomingCallNotificationOnly() {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(NOTIFICATION_ID)
-    }
-
-    private fun cancelNotifications() {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(NOTIFICATION_ID)
-        notificationManager.cancel(NOTIFICATION_ID_ACTIVE)
-    }
-
-    private fun callStateToString(state: Int): String {
-        return when (state) {
-            Call.STATE_NEW -> "NEW"
-            Call.STATE_DIALING -> "DIALING"
-            Call.STATE_RINGING -> "RINGING"
-            Call.STATE_ACTIVE -> "ACTIVE"
-            Call.STATE_HOLDING -> "HOLDING"
-            Call.STATE_DISCONNECTED -> "DISCONNECTED"
-            Call.STATE_CONNECTING -> "CONNECTING"
-            Call.STATE_DISCONNECTING -> "DISCONNECTING"
-            Call.STATE_SELECT_PHONE_ACCOUNT -> "SELECT_PHONE_ACCOUNT"
-            else -> "UNKNOWN ($state)"
+    /**
+     * `NotificationManager.cancel` does not remove a foreground-service notification, so the
+     * foreground state has to be released first. Skipping that is the classic cause of a call
+     * notification that will not go away.
+     */
+    private fun stopCallForeground() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        runCatching {
+            notificationManager.cancel(CallNotificationManager.NOTIFICATION_ID_INCOMING)
+            notificationManager.cancel(CallNotificationManager.NOTIFICATION_ID_ONGOING)
         }
+        foregroundNotificationId = null
     }
 
-    companion object {
+    // --- InCallController ---
+
+    override fun requestMute(muted: Boolean) {
+        setMuted(muted)
+    }
+
+    /**
+     * `CallAudioState` and the route APIs are deprecated from API 34 in favour of `CallEndpoint`, but
+     * the legacy callbacks are still delivered. Deprecation is suppressed only on the few audio
+     * adapter members here and in [audioModelOf], so a future `CallEndpoint` migration is confined to
+     * this section rather than spread across a class-level suppression as it was before.
+     */
+    @Suppress("DEPRECATION")
+    override fun requestAudioRoute(route: AudioRoute) {
+        setAudioRoute(route.telecomRoute)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun requestBluetoothDevice(address: String) {
+        val device = bluetoothDevices(callAudioState).firstOrNull { it.address == address }
+        if (device == null) {
+            Log.w(TAG, "No Bluetooth device matching the requested address")
+            return
+        }
+        requestBluetoothAudio(device)
+    }
+
+    override fun bringInCallUiToForeground(showDialpad: Boolean) {
+        val callId = CallRepository.state.value.primaryCall?.id ?: return
+        runCatching { startActivity(InCallIntents.callUi(this, callId, showDialpad)) }
+    }
+
+    // --- audio mapping ---
+
+    @Suppress("DEPRECATION")
+    private fun audioModelOf(audioState: CallAudioState?): CallAudioModel {
+        if (audioState == null) return CallAudioModel.DEFAULT
+        val devices = bluetoothDevices(audioState)
+        return CallAudioModel(
+            isMuted = audioState.isMuted,
+            route = CallAudioModel.routeFromMask(audioState.route),
+            supportedRoutes = CallAudioModel.routesFromMask(audioState.supportedRouteMask),
+            bluetoothDevices = devices.map {
+                BluetoothDeviceModel(address = it.address, name = deviceNameOf(it))
+            },
+            activeBluetoothAddress = audioState.activeBluetoothDevice?.address,
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bluetoothDevices(audioState: CallAudioState?): List<BluetoothDevice> =
+        audioState?.supportedBluetoothDevices?.toList().orEmpty()
+
+    /** `BluetoothDevice.getName` needs `BLUETOOTH_CONNECT` on API 31+; fall back to the address. */
+    private fun deviceNameOf(device: BluetoothDevice): String =
+        runCatching { device.name }.getOrNull()?.takeIf { it.isNotBlank() } ?: device.address
+
+    private companion object {
         private const val TAG = "MyInCallService"
-        private const val NOTIFICATION_ID = 8888
-        private const val NOTIFICATION_ID_ACTIVE = 8889
-        private const val CHANNEL_ID_INCOMING_CALLS = "incoming_calls"
-        private const val CHANNEL_ID_ACTIVE_CALLS = "active_calls"
-        
-        const val ACTION_ANSWER = "com.raushan.phone.telecom.action.ANSWER"
-        const val ACTION_DECLINE = "com.raushan.phone.telecom.action.DECLINE"
-        const val ACTION_TOGGLE_SPEAKER = "com.raushan.phone.telecom.action.TOGGLE_SPEAKER"
-        
-        var instance: MyInCallService? = null
     }
 }
