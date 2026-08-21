@@ -1,3 +1,35 @@
 <resources>
     <string name="app_name">Phone</string>
+
+    <!-- In-Call Screens -->
+    <string name="incoming_call_label">INCOMING CALL</string>
+    <string name="decline_label">Decline</string>
+    <string name="answer_label">Accept</string>
+    <string name="reply_with_message">Message</string>
+    <string name="caller_unknown">Unknown</string>
+    <string name="caller_loading">Loading…</string>
+    <string name="avatar_fallback">?</string>
+    <string name="call_duration_default">00:00</string>
+
+    <!-- Active Call Screen -->
+    <string name="mute_label">Mute</string>
+    <string name="muted_label">Muted</string>
+    <string name="keypad_label">Keypad</string>
+    <string name="speaker_label">Speaker</string>
+    <string name="add_call_label">Add Call</string>
+    <string name="video_label">Video</string>
+    <string name="hold_label">Hold</string>
+    <string name="end_call_label">End Call</string>
+    <string name="cannot_open_messages">Cannot open messages</string>
+
+    <!-- Notification -->
+    <string name="incoming_calls_channel_name">Incoming Calls</string>
+    <string name="incoming_calls_channel_description">Shows notifications for incoming phone calls</string>
+    <string name="notification_incoming_call">Incoming Call</string>
+    <string name="active_calls_channel_name">Active Calls</string>
+    <string name="active_calls_channel_description">Shows notification for active call</string>
+    <string name="notification_active_call">Active Call</string>
+    <string name="speaker_on_label">Speaker On</string>
+    <string name="speaker_off_label">Speaker Off</string>
+    <string name="hang_up_label">Hang Up</string>
 </resources>

@@ -4,6 +4,7 @@ import android.telecom.Call
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Contacts
@@ -13,13 +14,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -30,14 +46,17 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.raushan.phone.telecom.TelecomHelper
-import com.raushan.phone.ui.calllog.CallLogScreen
+import com.raushan.phone.ui.theme.PhoneTheme
+import com.raushan.phone.ui.theme.ElectricBlue
+import com.raushan.phone.ui.theme.OnPrimaryContainer
+import com.raushan.phone.ui.calllog.callLogScreen
 import com.raushan.phone.ui.contacts.ContactDetailScreen
 import com.raushan.phone.ui.contacts.ContactsScreen
 import com.raushan.phone.ui.dialpad.DialpadScreen
 import com.raushan.phone.ui.dialpad.DialpadViewModel
-import com.raushan.phone.ui.incall.ActiveCallScreen
+import com.raushan.phone.ui.incall.activeCallScreen
 import com.raushan.phone.ui.incall.InCallViewModel
-import com.raushan.phone.ui.incall.IncomingCallScreen
+import com.raushan.phone.ui.incall.incomingCallScreen
 import com.raushan.phone.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
@@ -47,16 +66,36 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
 }
 
 @Composable
-fun MainScreen(
-    inCallViewModel: InCallViewModel = viewModel()
+fun mainScreen(
+    inCallViewModel: InCallViewModel = viewModel(
+        viewModelStoreOwner = (LocalContext.current as? ComponentActivity)
+            ?: LocalViewModelStoreOwner.current!!
+    )
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val telecomHelper = TelecomHelper(context)
-    
-    val activeCall by inCallViewModel.activeCall.collectAsState()
-    val callState by inCallViewModel.callState.collectAsState()
-    
+
+    val activeCall by inCallViewModel.activeCall.collectAsStateWithLifecycle()
+    val callState by inCallViewModel.callState.collectAsStateWithLifecycle()
+    val isExpanded by inCallViewModel.isCallScreenExpanded.collectAsStateWithLifecycle()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val state = callState
+                if (state == Call.STATE_ACTIVE || state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || state == Call.STATE_HOLDING) {
+                    inCallViewModel.setCallScreenExpanded(false)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val items = listOf(
         Screen.CallLog,
         Screen.Dialpad,
@@ -65,23 +104,61 @@ fun MainScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            topBar = {
+                val callerName by inCallViewModel.callerName.collectAsStateWithLifecycle()
+                val callDuration by inCallViewModel.callDuration.collectAsStateWithLifecycle()
+
+                if (activeCall != null && !isExpanded && (callState == Call.STATE_ACTIVE || callState == Call.STATE_DIALING || callState == Call.STATE_CONNECTING || callState == Call.STATE_HOLDING)) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .clickable { inCallViewModel.setCallScreenExpanded(true) },
+                        color = ElectricBlue,
+                        contentColor = OnPrimaryContainer
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(vertical = 12.dp, horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = "Active Call",
+                                tint = OnPrimaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = if (callerName.isNotBlank()) callerName else "Ongoing Call",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = callDuration,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                }
+            },
             bottomBar = {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
-                
+
                 // Show bottom bar on primary screen destinations
                 val showBottomBar = items.any { screen ->
                     val destRoute = currentDestination?.route ?: ""
                     destRoute.startsWith(screen.route)
                 }
-                
+
                 if (showBottomBar) {
                     NavigationBar(
                         containerColor = MaterialTheme.colorScheme.surface,
                         tonalElevation = 0.dp
                     ) {
                         items.forEach { screen ->
-                            val isSelected = currentDestination?.hierarchy?.any { 
+                            val isSelected = currentDestination?.hierarchy?.any {
                                 val destRoute = it.route ?: ""
                                 destRoute.startsWith(screen.route)
                             } == true
@@ -146,7 +223,7 @@ fun MainScreen(
                 }
 
                 composable(Screen.CallLog.route) {
-                    CallLogScreen(
+                    callLogScreen(
                         onEntryClick = { entry ->
                             navController.navigate("contactDetail?phoneNumber=${entry.number}")
                         },
@@ -195,7 +272,7 @@ fun MainScreen(
                     val contactIdStr = backStackEntry.arguments?.getString("contactId")
                     val phoneNumber = backStackEntry.arguments?.getString("phoneNumber")
                     val contactId = contactIdStr?.toLongOrNull()
-                    
+
                     ContactDetailScreen(
                         contactId = contactId,
                         phoneNumber = phoneNumber,
@@ -214,20 +291,19 @@ fun MainScreen(
 
         // Call UI Overlay
         if (activeCall != null) {
-            when (callState) {
-                PredefinedCallState -> {
-                    // PredefinedCallState is resolved dynamically inside the ActiveCall composables
+            if (callState == Call.STATE_RINGING) {
+                incomingCallScreen(viewModel = inCallViewModel)
+            } else if (isExpanded && (callState == Call.STATE_ACTIVE || callState == Call.STATE_DIALING || callState == Call.STATE_CONNECTING || callState == Call.STATE_HOLDING)) {
+
+                // Back button minimization handler
+                BackHandler(enabled = true) {
+                    inCallViewModel.setCallScreenExpanded(false)
                 }
-            }
-            when (callState) {
-                Call.STATE_RINGING -> {
-                    IncomingCallScreen(viewModel = inCallViewModel)
-                }
-                Call.STATE_ACTIVE, Call.STATE_DIALING, Call.STATE_HOLDING, Call.STATE_CONNECTING -> {
-                    ActiveCallScreen(viewModel = inCallViewModel)
-                }
+
+                activeCallScreen(viewModel = inCallViewModel)
             }
         }
     }
 }
+
 private const val PredefinedCallState = -1
