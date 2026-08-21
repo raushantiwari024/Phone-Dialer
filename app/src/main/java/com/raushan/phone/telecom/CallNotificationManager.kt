@@ -86,6 +86,10 @@ internal class CallNotificationManager(private val context: Context) {
             .setContentIntent(InCallIntents.contentIntent(context, call.id))
             .setDeleteIntent(CallActionReceiver.declineIntent(context, call.id))
             .setStyle(style)
+            // Deliberately NOT setOnlyAlertOnce here. A full-screen intent is delivered as part of
+            // alerting, and this notification is re-posted whenever details or the avatar resolve, so
+            // suppressing subsequent alerts risks suppressing the takeover on some OEM builds.
+            .setOnlyAlertOnce(false)
 
         if (!state.isRingerSilenced) {
             builder.setFullScreenIntent(InCallIntents.fullScreenIntent(context, call.id), true)
@@ -112,6 +116,9 @@ internal class CallNotificationManager(private val context: Context) {
             .setOngoing(true)
             .setContentIntent(InCallIntents.contentIntent(context, call.id))
             .setStyle(style)
+            // Safe here: the ongoing channel is IMPORTANCE_LOW so it never alerts anyway, and this
+            // notification is re-posted on every audio-state change.
+            .setOnlyAlertOnce(true)
 
         // The chronometer is only meaningful once the call actually connected; a dialing call would
         // otherwise count up from the epoch.
@@ -155,7 +162,6 @@ internal class CallNotificationManager(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setColorized(true)
             .setColor(context.getColor(R.color.call_notification_accent))
-            .setOnlyAlertOnce(true)
 
     private fun statusTextOf(call: CallModel): String = context.getString(
         when {

@@ -1,5 +1,6 @@
 package com.raushan.phone.telecom
 
+import android.app.NotificationManager
 import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -74,6 +75,21 @@ class MyInCallService : InCallService(), InCallController {
         notificationManager = NotificationManagerCompat.from(this)
         CallRepository.attachController(this)
         CallRepository.setServiceConnected(true)
+        logFullScreenIntentAvailability()
+    }
+
+    /**
+     * From API 34 an app must hold the full-screen-intent appop to take over the screen. Holding
+     * `ROLE_DIALER` normally grants it automatically, but a user who skipped the default-dialer
+     * onboarding can end up bound as an `InCallService` without it — in which case the incoming-call
+     * screen silently degrades to a heads-up notification, which is indistinguishable from a bug.
+     *
+     * Logged rather than acted on, so `adb logcat -s MyInCallService` answers the question directly.
+     */
+    private fun logFullScreenIntentAvailability() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        Log.i(TAG, "canUseFullScreenIntent=${manager.canUseFullScreenIntent()}")
     }
 
     /**

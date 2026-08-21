@@ -13,4 +13,12 @@
       a Compose Color. Keep in sync with ElectricBlue in ui/theme/Color.kt.
     -->
     <color name="call_notification_accent">#FF3399FF</color>
+
+    <!--
+      Window backgrounds, used before Compose draws its first frame. Both are dark because the Compose
+      layer currently renders the dark scheme regardless of system setting; they gain a light variant
+      when the light palette lands. Keep in sync with Background in ui/theme/Color.kt.
+    -->
+    <color name="window_background">#FF131313</color>
+    <color name="incall_window_background">#FF131313</color>
 </resources>

@@ -25,7 +25,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,7 +44,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import android.content.Intent
+import com.raushan.phone.telecom.CallUiCoordinator
 import com.raushan.phone.telecom.TelecomHelper
+import com.raushan.phone.ui.incall.InCallActivity
 import com.raushan.phone.ui.theme.PhoneTheme
 import com.raushan.phone.ui.theme.ElectricBlue
 import com.raushan.phone.ui.theme.OnPrimaryContainer
@@ -54,9 +56,7 @@ import com.raushan.phone.ui.contacts.ContactDetailScreen
 import com.raushan.phone.ui.contacts.ContactsScreen
 import com.raushan.phone.ui.dialpad.DialpadScreen
 import com.raushan.phone.ui.dialpad.DialpadViewModel
-import com.raushan.phone.ui.incall.activeCallScreen
 import com.raushan.phone.ui.incall.InCallViewModel
-import com.raushan.phone.ui.incall.incomingCallScreen
 import com.raushan.phone.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
@@ -78,11 +78,9 @@ fun mainScreen(
 
     val activeCall by inCallViewModel.activeCall.collectAsStateWithLifecycle()
     val callState by inCallViewModel.callState.collectAsStateWithLifecycle()
-    val isExpanded by inCallViewModel.isCallScreenExpanded.collectAsStateWithLifecycle()
 
-    // An ON_RESUME observer used to force the call screen closed here. That meant tapping the ongoing
-    // call notification — an explicit request for the full call screen — reliably landed the user on
-    // the thin banner instead.
+    // The call screens no longer render here. They live in InCallActivity, which is the only surface
+    // allowed to show over the keyguard. What remains is the minimised banner, which reopens it.
 
     val items = listOf(
         Screen.CallLog,
@@ -96,12 +94,18 @@ fun mainScreen(
                 val callerName by inCallViewModel.callerName.collectAsStateWithLifecycle()
                 val callDuration by inCallViewModel.callDuration.collectAsStateWithLifecycle()
 
-                if (activeCall != null && !isExpanded && callState.isOngoing) {
+                if (activeCall != null && callState.isOngoing) {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
-                            .clickable { inCallViewModel.setCallScreenExpanded(true) },
+                            .clickable {
+                                activeCall?.id?.let(CallUiCoordinator::clearDismissed)
+                                context.startActivity(
+                                    Intent(context, InCallActivity::class.java)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            },
                         color = ElectricBlue,
                         contentColor = OnPrimaryContainer
                     ) {
@@ -274,25 +278,6 @@ fun mainScreen(
                         onBackClick = { navController.popBackStack() }
                     )
                 }
-            }
-        }
-
-        // Call UI Overlay
-        if (activeCall != null) {
-            if (callState.isRinging) {
-                // Back must not escape a ringing call, which it previously did — there was no handler
-                // on this branch, so the press fell through to the nav host.
-                BackHandler(enabled = true) {}
-
-                incomingCallScreen(viewModel = inCallViewModel)
-            } else if (isExpanded && callState.isOngoing) {
-
-                // Back button minimization handler
-                BackHandler(enabled = true) {
-                    inCallViewModel.setCallScreenExpanded(false)
-                }
-
-                activeCallScreen(viewModel = inCallViewModel)
             }
         }
     }

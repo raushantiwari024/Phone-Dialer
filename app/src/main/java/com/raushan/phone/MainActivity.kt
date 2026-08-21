@@ -11,10 +11,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.raushan.phone.telecom.CallRepository
+import com.raushan.phone.telecom.CallUiCoordinator
 import com.raushan.phone.telecom.DefaultDialerManager
+import com.raushan.phone.telecom.InCallIntents
 import com.raushan.phone.ui.mainScreen
 import com.raushan.phone.ui.onboarding.SetDefaultDialerScreen
 import com.raushan.phone.ui.theme.PhoneTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -52,6 +62,8 @@ class MainActivity : ComponentActivity() {
             requestCallPermissions()
         }
 
+        observeCallsWhileForeground()
+
         enableEdgeToEdge()
         setContent {
             PhoneTheme {
@@ -82,6 +94,34 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isDefaultState = defaultDialerManager.isDefaultDialer()
+    }
+
+    /**
+     * Brings up the call screen when a call starts while our app is the foreground app.
+     *
+     * `repeatOnLifecycle(RESUMED)` is the whole foreground test — no usage-stats permission, no
+     * polling. It is also what implements the two-tier presentation rule:
+     *
+     * - Our app resumed: this collector runs, so the call takes over the screen. That is a legal
+     *   foreground activity start.
+     * - Device locked or screen off: we are not resumed, so nothing happens here and the notification's
+     *   full-screen intent takes over instead — launched by the platform, which sidesteps
+     *   background-activity-start restrictions entirely.
+     * - Another app in the foreground: we are not resumed either, so the app deliberately does
+     *   nothing and the system heads-up call banner is the only surface. No rude takeover.
+     */
+    private fun observeCallsWhileForeground() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                CallRepository.state
+                    .map(CallUiCoordinator::autoShowTarget)
+                    .distinctUntilChanged()
+                    .filterNotNull()
+                    .collect { callId ->
+                        startActivity(InCallIntents.callUi(this@MainActivity, callId))
+                    }
+            }
+        }
     }
 
     private fun requestCallPermissions() {
