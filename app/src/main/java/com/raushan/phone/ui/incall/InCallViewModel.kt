@@ -1,6 +1,7 @@
 package com.raushan.phone.ui.incall
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.raushan.phone.telecom.CallRepository
@@ -8,6 +9,7 @@ import com.raushan.phone.telecom.TelecomHelper
 import com.raushan.phone.telecom.model.CallDuration
 import com.raushan.phone.telecom.model.CallModel
 import com.raushan.phone.telecom.model.CallSessionState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -36,6 +38,10 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
 
     private val dialpadVisible = MutableStateFlow(false)
     private val dialpadDigits = MutableStateFlow("")
+
+    private var dtmfStopJob: Job? = null
+    private var dtmfStartedAtMillis = 0L
+    private var dtmfCallId: String? = null
 
     private val _events = MutableSharedFlow<InCallUiEvent>(
         replay = 0,
@@ -100,17 +106,53 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
                 dialpadDigits.value = ""
             }
 
-            is InCallAction.PressDialKey -> {
-                session.activeCall?.let { telecomHelper.playDtmfTone(it.id, action.digit) }
-                dialpadDigits.value += action.digit
-            }
+            is InCallAction.PressDialKey -> startDtmf(session, action.digit)
 
-            InCallAction.ReleaseDialKey ->
-                session.activeCall?.let { telecomHelper.stopDtmfTone(it.id) }
+            InCallAction.ReleaseDialKey -> stopDtmf(session)
 
             InCallAction.AddCall -> _events.tryEmit(InCallUiEvent.OpenDialerForSecondCall)
 
             InCallAction.ReplyWithMessage -> replyWithMessage(session)
+        }
+    }
+
+    /**
+     * Starts a DTMF tone.
+     *
+     * Tones are sent on the call Telecom considers active, which during an IVR call is the only call.
+     * Falls back to the primary call so a state Telecom has not settled yet cannot silently swallow a
+     * keypress.
+     */
+    private fun startDtmf(session: CallSessionState, digit: Char) {
+        val target = session.activeCall ?: session.primaryCall
+        if (target == null) {
+            Log.w(TAG, "DTMF '$digit' dropped: no active call")
+            return
+        }
+        dtmfStopJob?.cancel()
+        dtmfStartedAtMillis = System.currentTimeMillis()
+        dtmfCallId = target.id
+        Log.d(TAG, "DTMF start '$digit' on ${target.id} (state=${target.state})")
+        telecomHelper.playDtmfTone(target.id, digit)
+        dialpadDigits.value += digit
+    }
+
+    /**
+     * Stops the tone, but never before [MIN_DTMF_DURATION_MS] has elapsed.
+     *
+     * This is the fix for tones not registering with an IVR. Playback was press-and-hold, so a quick
+     * tap started and stopped the tone within a few tens of milliseconds — far below the ~70ms minimum
+     * the DTMF standard requires, and well below what real IVR systems reliably detect. Holding the
+     * tone for a floor duration makes a tap behave like a deliberate keypress.
+     */
+    private fun stopDtmf(session: CallSessionState) {
+        val callId = dtmfCallId ?: session.activeCall?.id ?: return
+        val elapsed = System.currentTimeMillis() - dtmfStartedAtMillis
+        val remaining = (MIN_DTMF_DURATION_MS - elapsed).coerceAtLeast(0L)
+        dtmfStopJob = viewModelScope.launch {
+            if (remaining > 0L) delay(remaining)
+            telecomHelper.stopDtmfTone(callId)
+            dtmfCallId = null
         }
     }
 
@@ -196,8 +238,20 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         isEmergency = isEmergency,
     )
 
+    override fun onCleared() {
+        dtmfStopJob?.cancel()
+        super.onCleared()
+    }
+
     private companion object {
+        private const val TAG = "InCallViewModel"
         private const val TICK_INTERVAL_MS = 1000L
         private const val EVENT_BUFFER = 4
+
+        /**
+         * Floor duration for a DTMF tone. The standard requires at least ~70ms; real IVR systems want
+         * more, and carriers vary. 250ms is comfortably detectable without feeling laggy.
+         */
+        private const val MIN_DTMF_DURATION_MS = 250L
     }
 }

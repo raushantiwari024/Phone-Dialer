@@ -9,7 +9,9 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -186,11 +188,37 @@ private fun swipeToAnswerControl(
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val thresholdPx = remember(density) { with(density) { DRAG_THRESHOLD.toPx() } }
+    // Hard travel limit. Without this the handle followed the finger all the way up the screen.
+    val maxTravelPx = remember(thresholdPx) { thresholdPx * MAX_TRAVEL_FACTOR }
     val offset = remember { Animatable(0f) }
     var committed by remember { mutableStateOf(false) }
+    var armed by remember { mutableStateOf(false) }
 
     val progressUp = (-offset.value / thresholdPx).coerceIn(0f, 1f)
     val progressDown = (offset.value / thresholdPx).coerceIn(0f, 1f)
+    val progress = maxOf(progressUp, progressDown)
+
+    // Fires once when the drag crosses the point of no return, so the commit is felt before release.
+    LaunchedEffect(progress >= 1f) {
+        if (progress >= 1f && !armed) {
+            armed = true
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        } else if (progress < 1f) {
+            armed = false
+        }
+    }
+
+    // Idle nudge on the hint arrows, so the handle reads as draggable before it is touched.
+    val nudge = rememberInfiniteTransition(label = "dragHint")
+    val nudgeOffset by nudge.animateFloat(
+        initialValue = 0f,
+        targetValue = -HINT_NUDGE_PX,
+        animationSpec = infiniteRepeatable(
+            animation = tween(HINT_NUDGE_DURATION_MS, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "nudgeOffset",
+    )
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -202,14 +230,20 @@ private fun swipeToAnswerControl(
             tint = AcceptGreen,
             modifier = Modifier
                 .size(28.dp)
-                .graphicsLayer { alpha = HINT_MIN_ALPHA + progressUp * (1f - HINT_MIN_ALPHA) },
+                .graphicsLayer {
+                    alpha = HINT_MIN_ALPHA + progressUp * (1f - HINT_MIN_ALPHA)
+                    translationY = if (progress == 0f) nudgeOffset else 0f
+                },
         )
 
         Text(
             text = stringResource(R.string.swipe_up_to_answer),
             style = MaterialTheme.typography.labelMedium,
             color = OnSurfaceVariant,
-            modifier = Modifier.padding(vertical = 8.dp),
+            modifier = Modifier
+                .padding(vertical = 8.dp)
+                // Fade the opposite hint out as the drag commits to a direction.
+                .graphicsLayer { alpha = 1f - progressDown },
         )
 
         Surface(
@@ -222,42 +256,63 @@ private fun swipeToAnswerControl(
             border = BorderStroke(1.dp, OutlineVariant),
             modifier = Modifier
                 .size(HANDLE_SIZE)
-                .graphicsLayer { translationY = offset.value }
+                .graphicsLayer {
+                    translationY = offset.value
+                    // Grows slightly as the drag approaches the commit point.
+                    val scale = 1f + progress * HANDLE_MAX_GROWTH
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .draggable(
                     orientation = Orientation.Vertical,
                     state = rememberDraggableState { delta ->
-                        if (!committed) {
-                            scope.launch { offset.snapTo(offset.value + delta) }
+                        if (committed) return@rememberDraggableState
+                        scope.launch {
+                            offset.snapTo(
+                                (offset.value + delta).coerceIn(-maxTravelPx, maxTravelPx),
+                            )
                         }
                     },
                     onDragStopped = {
                         when {
                             committed -> Unit
+
                             offset.value <= -thresholdPx -> {
                                 committed = true
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                // Settle at the committed position instead of snapping back, so the
+                                // gesture visibly completes rather than looking like it failed.
+                                offset.animateTo(-maxTravelPx, tween(COMMIT_SETTLE_MS))
                                 onAnswer()
                             }
+
                             offset.value >= thresholdPx -> {
                                 committed = true
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                offset.animateTo(maxTravelPx, tween(COMMIT_SETTLE_MS))
                                 onDecline()
                             }
-                            // Released short of the threshold, so spring back rather than acting.
-                            else -> offset.animateTo(0f)
+
+                            // Released short of the threshold: spring back rather than acting.
+                            else -> offset.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                ),
+                            )
                         }
                     },
                 ),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    imageVector = Icons.Default.Call,
-                    contentDescription = stringResource(R.string.answer_handle_content_description),
-                    tint = if (progressUp > COMMIT_TINT_AT || progressDown > COMMIT_TINT_AT) {
-                        OnAcceptGreen
+                    // Flips to the hang-up glyph once the drag is clearly heading downward.
+                    imageVector = if (progressDown > COMMIT_TINT_AT) {
+                        Icons.Default.CallEnd
                     } else {
-                        OnSurface
+                        Icons.Default.Call
                     },
+                    contentDescription = stringResource(R.string.answer_handle_content_description),
+                    tint = if (progress > COMMIT_TINT_AT) OnAcceptGreen else OnSurface,
                     modifier = Modifier.size(34.dp),
                 )
             }
@@ -267,7 +322,9 @@ private fun swipeToAnswerControl(
             text = stringResource(R.string.swipe_down_to_decline),
             style = MaterialTheme.typography.labelMedium,
             color = OnSurfaceVariant,
-            modifier = Modifier.padding(vertical = 8.dp),
+            modifier = Modifier
+                .padding(vertical = 8.dp)
+                .graphicsLayer { alpha = 1f - progressUp },
         )
 
         Icon(
@@ -276,7 +333,10 @@ private fun swipeToAnswerControl(
             tint = DeclineRed,
             modifier = Modifier
                 .size(28.dp)
-                .graphicsLayer { alpha = HINT_MIN_ALPHA + progressDown * (1f - HINT_MIN_ALPHA) },
+                .graphicsLayer {
+                    alpha = HINT_MIN_ALPHA + progressDown * (1f - HINT_MIN_ALPHA)
+                    translationY = if (progress == 0f) -nudgeOffset else 0f
+                },
         )
     }
 }
@@ -552,9 +612,16 @@ fun rememberContactPhoto(photoUriString: String?): ImageBitmap? {
     return bitmap
 }
 
-private val DRAG_THRESHOLD = 96.dp
+private val DRAG_THRESHOLD = 88.dp
 private val HANDLE_SIZE = 84.dp
+
+/** Travel is capped at the threshold times this, so the handle cannot follow the finger off-screen. */
+private const val MAX_TRAVEL_FACTOR = 1.15f
+private const val HANDLE_MAX_GROWTH = 0.12f
 private const val HINT_MIN_ALPHA = 0.35f
+private const val HINT_NUDGE_PX = 10f
+private const val HINT_NUDGE_DURATION_MS = 900
+private const val COMMIT_SETTLE_MS = 120
 private const val COMMIT_TINT_AT = 0.5f
 private const val PULSE_DURATION_MS = 1500
 private const val FALLBACK_MONOGRAM = "?"
