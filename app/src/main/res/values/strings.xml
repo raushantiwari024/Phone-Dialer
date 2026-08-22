@@ -22,6 +22,24 @@
     <string name="end_call_label">End Call</string>
     <string name="cannot_open_messages">Cannot open messages</string>
 
+    <!-- Call status -->
+    <string name="call_status_dialing">Dialing…</string>
+    <string name="call_status_connecting">Connecting…</string>
+    <string name="call_status_ringing">Incoming call</string>
+    <string name="call_status_on_hold">On hold</string>
+    <string name="call_status_call_waiting">Call waiting</string>
+    <string name="call_ended_label">Call ended</string>
+    <string name="ongoing_call_label">Ongoing call</string>
+
+    <!-- Lock-screen answer gesture -->
+    <string name="swipe_up_to_answer">Swipe up to answer</string>
+    <string name="swipe_down_to_decline">Swipe down to decline</string>
+    <string name="answer_handle_content_description">Drag up to answer, down to decline</string>
+
+    <!-- Accessibility -->
+    <string name="caller_photo_content_description">Caller photo</string>
+    <string name="active_call_content_description">Active call</string>
+
     <!-- Caller labels -->
     <string name="caller_private_number">Private number</string>
     <string name="caller_payphone">Payphone</string>

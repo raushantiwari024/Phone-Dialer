@@ -1,17 +1,39 @@
 package com.raushan.phone.ui.incall
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.raushan.phone.R
+import com.raushan.phone.ui.theme.Background
+import com.raushan.phone.ui.theme.OnSurfaceVariant
+import kotlinx.coroutines.delay
 
 /**
- * Chooses which call screen to show for the current state.
+ * Picks the call screen for the current state.
  *
- * Lives in its own file rather than inside [InCallActivity] so it stays previewable and so the activity
- * keeps to lifecycle and window concerns.
+ * Separate from [InCallActivity] so it stays previewable and the activity keeps to window and lifecycle
+ * concerns.
  */
 @Composable
 @Suppress("FunctionName")
@@ -20,28 +42,81 @@ fun inCallRoute(
     onMinimize: () -> Unit = {},
     onFinished: () -> Unit = {},
 ) {
-    val callState by viewModel.callState.collectAsStateWithLifecycle()
-    val activeCall by viewModel.activeCall.collectAsStateWithLifecycle()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
 
-    when {
-        callState.isRinging -> {
-            // Back must not dismiss a ringing call. Previously no handler was registered on this
-            // branch at all, so the press fell through and left the phone ringing behind the app.
-            BackHandler(enabled = true) {}
-            incomingCallScreen(viewModel = viewModel)
+    // Back must never dismiss a ringing call. There was previously no handler on that branch at all,
+    // so the press fell through and left the phone ringing behind the app.
+    BackHandler(enabled = true) {
+        when {
+            state.isRinging -> Unit
+            state.dialpadVisible -> viewModel.onAction(InCallAction.HideDialpad)
+            state.mode == InCallUiState.Mode.NoCall -> onFinished()
+            else -> onMinimize()
         }
+    }
 
-        callState.isOngoing -> {
-            BackHandler(enabled = true) { onMinimize() }
-            activeCallScreen(viewModel = viewModel)
-        }
+    AnimatedContent(
+        targetState = state.mode,
+        transitionSpec = {
+            fadeIn(tween(TRANSITION_IN_MS)) togetherWith fadeOut(tween(TRANSITION_OUT_MS))
+        },
+        label = "inCallMode",
+    ) { mode ->
+        when (mode) {
+            InCallUiState.Mode.Incoming,
+            InCallUiState.Mode.IncomingWhileOngoing,
+            -> incomingCallScreen(viewModel = viewModel)
 
-        else -> {
-            // No live call to show. The activity also watches the session itself; this covers the
-            // window between the last call ending and that signal arriving.
-            LaunchedEffect(activeCall) {
-                if (activeCall == null) onFinished()
+            InCallUiState.Mode.Ongoing,
+            InCallUiState.Mode.TwoOngoing,
+            -> activeCallScreen(viewModel = viewModel)
+
+            InCallUiState.Mode.Ended -> callEndedContent(state = state)
+
+            InCallUiState.Mode.NoCall -> {
+                // The call screen used to vanish abruptly on hang up with no confirmation at all.
+                callEndedContent(state = state)
+                LaunchedEffect(Unit) {
+                    delay(CALL_ENDED_DWELL_MS)
+                    onFinished()
+                }
             }
         }
     }
 }
+
+@Composable
+@Suppress("FunctionName")
+private fun callEndedContent(
+    state: InCallUiState,
+    modifier: Modifier = Modifier,
+) {
+    Surface(modifier = modifier.fillMaxSize(), color = Background) {
+        Box(contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.safeDrawingPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                state.primary?.let { call ->
+                    callerAvatar(call = call, size = 120.dp)
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = call.displayName,
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Text(
+                    text = stringResource(R.string.call_ended_label),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = OnSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private const val CALL_ENDED_DWELL_MS = 1200L
+private const val TRANSITION_IN_MS = 180
+private const val TRANSITION_OUT_MS = 140

@@ -41,3 +41,16 @@ val CardSurface = Color(0xFF1E1E1E)
 val ElevationLevel2 = Color(0xFF242424)
 val InputBackground = Color(0xFF2A2A2A)
 val AvatarSurface = Color(0xFF201F1F)
+
+// Call screen surfaces. Named tokens rather than inline Color.White.copy(alpha = ...) in the UI.
+val GlassFill = Color(0x14FFFFFF)
+val GlassBorder = Color(0x1AFFFFFF)
+val CallAccentGlow = Color(0x0D3399FF)
+
+// Answer and decline. Saturated green and red rather than the brand blue and the pale salmon Error
+// token: these are the most consequential controls in the app, often pressed under time pressure on a
+// locked device, so they need to be unmistakable at a glance rather than two similar circles.
+val AcceptGreen = Color(0xFF16A34A)
+val OnAcceptGreen = Color(0xFFFFFFFF)
+val DeclineRed = Color(0xFFDC2626)
+val OnDeclineRed = Color(0xFFFFFFFF)

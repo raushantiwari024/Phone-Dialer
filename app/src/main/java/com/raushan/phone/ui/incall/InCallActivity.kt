@@ -2,11 +2,14 @@ package com.raushan.phone.ui.incall
 
 import android.app.KeyguardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -52,11 +55,15 @@ class InCallActivity : ComponentActivity() {
 
         setContent {
             PhoneTheme {
+                val model: InCallViewModel = viewModel()
                 inCallRoute(
-                    viewModel = viewModel(),
+                    viewModel = model,
                     onMinimize = ::minimize,
                     onFinished = ::finishCallUi,
                 )
+                LaunchedEffect(model) {
+                    model.events.collect(::handleUiEvent)
+                }
             }
         }
 
@@ -119,6 +126,49 @@ class InCallActivity : ComponentActivity() {
         moveTaskToBack(true)
     }
 
+    /**
+     * Effects the screens cannot perform themselves.
+     *
+     * Both leave the call activity for another app, so both need the keyguard dismissed first — unlike
+     * answering, which deliberately stays above the lock screen and never prompts for a PIN.
+     */
+    private fun handleUiEvent(event: InCallUiEvent) {
+        when (event) {
+            InCallUiEvent.OpenDialerForSecondCall -> startDismissingKeyguard(
+                Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+
+            is InCallUiEvent.OpenSms -> startDismissingKeyguard(
+                Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", event.number, null))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    private fun startDismissingKeyguard(target: Intent) {
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isKeyguardLocked) {
+            launchSafely(target)
+            return
+        }
+        keyguard.requestDismissKeyguard(
+            this,
+            object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() = launchSafely(target)
+
+                // Cancelled or failed: leave the call exactly as it was. The old quick-reply path
+                // hung the caller up first and then tried to open the SMS app, so a cancelled unlock
+                // dropped the call and sent nothing.
+                override fun onDismissCancelled() = Unit
+            },
+        )
+    }
+
+    private fun launchSafely(intent: Intent) {
+        runCatching { startActivity(intent) }
+            .onFailure { Log.w(TAG, "Could not start $intent", it) }
+    }
+
     private fun finishCallUi() {
         if (isFinishing) return
         // Drop the keyguard exemption before the window goes away, so the lock screen reasserts itself
@@ -129,6 +179,8 @@ class InCallActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val TAG = "InCallActivity"
+
 
         /**
          * Whether a call should take over the whole screen rather than only showing a heads-up banner.

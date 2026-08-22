@@ -8,118 +8,124 @@ import com.raushan.phone.telecom.TelecomHelper
 import com.raushan.phone.telecom.model.CallDuration
 import com.raushan.phone.telecom.model.CallModel
 import com.raushan.phone.telecom.model.CallSessionState
-import com.raushan.phone.telecom.model.CallState
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * In-call state for the current UI.
+ * Projects [CallRepository] into a single immutable UI state, and turns UI actions into
+ * [TelecomHelper] calls.
  *
- * A projection of [CallRepository] — it registers no `Call.Callback` of its own and keeps no optimistic
- * audio state. The previous version did both: it registered an anonymous callback inside a flow
- * collector and never unregistered it, and it flipped local mute and speaker booleans that were never
- * reconciled with the real audio route.
- *
- * The nine separate flows here are retained so the existing screens keep working while the UI is
- * migrated to a single immutable state wrapper in a later step.
+ * Holds no call state of its own: it registers no `Call.Callback` and keeps no optimistic mute or
+ * speaker flags. Both were previously true, and the callback was never unregistered.
  */
 class InCallViewModel(application: Application) : AndroidViewModel(application) {
 
     private val telecomHelper = TelecomHelper(application)
 
+    /** Ticks once a second so elapsed durations recompute. Independent of call state changes. */
+    private val ticker = MutableStateFlow(0L)
+
+    private val dialpadVisible = MutableStateFlow(false)
+    private val dialpadDigits = MutableStateFlow("")
+
+    private val _events = MutableSharedFlow<InCallUiEvent>(
+        replay = 0,
+        extraBufferCapacity = EVENT_BUFFER,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<InCallUiEvent> = _events.asSharedFlow()
+
     /**
      * `Eagerly`, not `WhileSubscribed`. The old `WhileSubscribed(5000)` restarted the upstream on every
-     * background/foreground cycle, and because the collector registered a callback each time, those
-     * accumulated and triggered a timer cancel/restart storm on every state change.
+     * background/foreground cycle; combined with per-emission callback registration that produced
+     * accumulating callbacks and a timer cancel/restart storm.
      */
-    private val session: StateFlow<CallSessionState> = CallRepository.state
-        .stateIn(viewModelScope, SharingStarted.Eagerly, CallSessionState.EMPTY)
-
-    val activeCall: StateFlow<CallModel?> = session
-        .map { it.primaryCall }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val callState: StateFlow<CallState> = session
-        .map { it.primaryCall?.state ?: CallState.DISCONNECTED }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, CallState.DISCONNECTED)
-
-    val callerNumber: StateFlow<String> = session
-        .map { it.primaryCall?.number.orEmpty() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    /**
-     * Already resolved upstream, so there is no "Loading…" sentinel to compare against any more. The
-     * old code compared a ViewModel string constant against a *string resource* to decide whether to
-     * draw a monogram, which broke under localisation.
-     */
-    val callerName: StateFlow<String> = session
-        .map { it.primaryCall?.displayName.orEmpty() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    val callerPhotoUri: StateFlow<String?> = session
-        .map { it.primaryCall?.photoUri }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val isMuted: StateFlow<Boolean> = session
-        .map { it.audio.isMuted }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    val isSpeakerOn: StateFlow<Boolean> = session
-        .map { it.audio.isSpeakerOn }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    private val _callDuration = MutableStateFlow(CallDuration.ZERO)
-    val callDuration: StateFlow<String> = _callDuration.asStateFlow()
-
-    private val _isCallScreenExpanded = MutableStateFlow(true)
-    val isCallScreenExpanded: StateFlow<Boolean> = _isCallScreenExpanded.asStateFlow()
-
-    private var timerJob: Job? = null
+    val uiState: StateFlow<InCallUiState> = combine(
+        CallRepository.state,
+        ticker,
+        dialpadVisible,
+        dialpadDigits,
+    ) { session, _, dialpadOpen, digits ->
+        session.toUiState(dialpadOpen, digits)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, InCallUiState.EMPTY)
 
     init {
-        // Re-expand for each new call, keyed on the call id so a state change within one call does not
-        // yank the screen back open.
-        session
-            .map { it.primaryCall?.id }
-            .distinctUntilChanged()
-            .onEach { id -> if (id != null) _isCallScreenExpanded.value = true }
-            .launchIn(viewModelScope)
-
-        session
-            .map { it.primaryCall?.takeIf { call -> call.state == CallState.ACTIVE }?.connectTimeMillis }
-            .distinctUntilChanged()
-            .onEach(::restartTimer)
-            .launchIn(viewModelScope)
-    }
-
-    private fun restartTimer(connectTimeMillis: Long?) {
-        timerJob?.cancel()
-        if (connectTimeMillis == null || connectTimeMillis <= 0L) {
-            _callDuration.value = CallDuration.ZERO
-            return
-        }
-        timerJob = viewModelScope.launch {
+        viewModelScope.launch {
             while (true) {
-                _callDuration.value =
-                    CallDuration.since(connectTimeMillis, System.currentTimeMillis())
-                delay(TIMER_INTERVAL_MS)
+                delay(TICK_INTERVAL_MS)
+                ticker.value += 1
             }
         }
     }
 
-    fun endCall() {
-        val session = session.value
-        val target = session.ringingCall ?: session.primaryCall ?: return
+    fun onAction(action: InCallAction) {
+        val session = CallRepository.state.value
+        when (action) {
+            InCallAction.Answer -> answer(session)
+
+            InCallAction.AnswerHoldingCurrent ->
+                session.ringingCall?.let { telecomHelper.answerAndHoldActive(it.id) }
+
+            InCallAction.AnswerEndingCurrent ->
+                session.ringingCall?.let { telecomHelper.answerAndEndActive(it.id) }
+
+            InCallAction.Decline ->
+                session.ringingCall?.let { telecomHelper.rejectCall(it.id) }
+
+            InCallAction.EndCall -> endCall(session)
+
+            InCallAction.ToggleMute -> telecomHelper.toggleMute()
+
+            InCallAction.ToggleSpeaker -> telecomHelper.toggleSpeaker()
+
+            InCallAction.ToggleHold -> toggleHold(session)
+
+            InCallAction.Swap -> telecomHelper.swapCalls()
+
+            InCallAction.Merge -> telecomHelper.mergeCalls()
+
+            InCallAction.ShowDialpad -> dialpadVisible.value = true
+
+            InCallAction.HideDialpad -> {
+                dialpadVisible.value = false
+                dialpadDigits.value = ""
+            }
+
+            is InCallAction.PressDialKey -> {
+                session.activeCall?.let { telecomHelper.playDtmfTone(it.id, action.digit) }
+                dialpadDigits.value += action.digit
+            }
+
+            InCallAction.ReleaseDialKey ->
+                session.activeCall?.let { telecomHelper.stopDtmfTone(it.id) }
+
+            InCallAction.AddCall -> _events.tryEmit(InCallUiEvent.OpenDialerForSecondCall)
+
+            InCallAction.ReplyWithMessage -> replyWithMessage(session)
+        }
+    }
+
+    private fun answer(session: CallSessionState) {
+        val ringing = session.ringingCall ?: return
+        if (session.mustEndActiveToAnswer) {
+            telecomHelper.answerAndEndActive(ringing.id)
+        } else {
+            telecomHelper.answerCall(ringing.id)
+        }
+    }
+
+    /** A ringing call is rejected; anything else is disconnected. */
+    private fun endCall(session: CallSessionState) {
+        val target = session.primaryCall ?: session.ringingCall ?: return
         if (target.isRinging) {
             telecomHelper.rejectCall(target.id)
         } else {
@@ -127,33 +133,71 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun answerCall() {
-        val session = session.value
-        val ringing = session.ringingCall ?: return
+    private fun toggleHold(session: CallSessionState) {
+        val held = session.heldCall
+        val active = session.activeCall
         when {
-            session.mustEndActiveToAnswer -> telecomHelper.answerAndEndActive(ringing.id)
-            else -> telecomHelper.answerCall(ringing.id)
+            // With two calls the control means swap, not hold.
+            held != null && active != null -> telecomHelper.swapCalls()
+            held != null -> telecomHelper.unholdCall(held.id)
+            active != null -> telecomHelper.holdCall(active.id)
         }
     }
 
-    fun toggleMute() {
-        telecomHelper.toggleMute()
+    /**
+     * Order matters: the SMS app is opened first and the call is only released afterwards.
+     *
+     * The previous implementation ended the call and *then* fired the intent, so if the target could
+     * not be launched the caller was hung up and no message was ever sent.
+     */
+    private fun replyWithMessage(session: CallSessionState) {
+        val ringing = session.ringingCall ?: return
+        if (!ringing.hasDisplayableNumber) return
+        _events.tryEmit(InCallUiEvent.OpenSms(ringing.number))
     }
 
-    fun toggleSpeaker() {
-        telecomHelper.toggleSpeaker()
+    private fun CallSessionState.toUiState(
+        dialpadOpen: Boolean,
+        digits: String,
+    ): InCallUiState {
+        val primaryModel = primaryCall
+        val mode = when {
+            primaryModel == null -> InCallUiState.Mode.NoCall
+            isCallWaiting -> InCallUiState.Mode.IncomingWhileOngoing
+            primaryModel.isRinging -> InCallUiState.Mode.Incoming
+            canSwap -> InCallUiState.Mode.TwoOngoing
+            else -> InCallUiState.Mode.Ongoing
+        }
+
+        return InCallUiState(
+            mode = mode,
+            primary = primaryModel?.toCardState(),
+            secondary = secondaryCall?.toCardState(),
+            isMuted = audio.isMuted,
+            isSpeakerOn = audio.isSpeakerOn,
+            canAddCall = canAddCall,
+            canHold = primaryModel?.capabilities?.canHold == true,
+            canSwap = canSwap,
+            canMerge = canMerge,
+            canReplyWithMessage = ringingCall?.capabilities?.canRespondViaText == true,
+            mustEndActiveToAnswer = mustEndActiveToAnswer,
+            dialpadVisible = dialpadOpen,
+            dialpadDigits = digits,
+        )
     }
 
-    fun setCallScreenExpanded(expanded: Boolean) {
-        _isCallScreenExpanded.value = expanded
-    }
-
-    override fun onCleared() {
-        timerJob?.cancel()
-        super.onCleared()
-    }
+    private fun CallModel.toCardState(): CallCardUiState = CallCardUiState(
+        callId = id,
+        displayName = displayName,
+        number = number,
+        photoUri = photoUri,
+        state = state,
+        durationText = CallDuration.since(connectTimeMillis, System.currentTimeMillis()),
+        isEmergency = isEmergency,
+    )
 
     private companion object {
-        private const val TIMER_INTERVAL_MS = 1000L
+        private const val TICK_INTERVAL_MS = 1000L
+        private const val EVENT_BUFFER = 4
     }
 }

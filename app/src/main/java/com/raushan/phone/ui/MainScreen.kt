@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +46,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import android.content.Intent
+import com.raushan.phone.R
 import com.raushan.phone.telecom.CallUiCoordinator
 import com.raushan.phone.telecom.TelecomHelper
 import com.raushan.phone.ui.incall.InCallActivity
@@ -76,8 +78,8 @@ fun mainScreen(
     val context = LocalContext.current
     val telecomHelper = TelecomHelper(context)
 
-    val activeCall by inCallViewModel.activeCall.collectAsStateWithLifecycle()
-    val callState by inCallViewModel.callState.collectAsStateWithLifecycle()
+    val inCallState by inCallViewModel.uiState.collectAsStateWithLifecycle()
+    val ongoingCall = inCallState.primary?.takeIf { it.state.isOngoing }
 
     // The call screens no longer render here. They live in InCallActivity, which is the only surface
     // allowed to show over the keyguard. What remains is the minimised banner, which reopens it.
@@ -91,16 +93,13 @@ fun mainScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
-                val callerName by inCallViewModel.callerName.collectAsStateWithLifecycle()
-                val callDuration by inCallViewModel.callDuration.collectAsStateWithLifecycle()
-
-                if (activeCall != null && callState.isOngoing) {
+                if (ongoingCall != null) {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
                             .clickable {
-                                activeCall?.id?.let(CallUiCoordinator::clearDismissed)
+                                CallUiCoordinator.clearDismissed(ongoingCall.callId)
                                 context.startActivity(
                                     Intent(context, InCallActivity::class.java)
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -116,18 +115,20 @@ fun mainScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Call,
-                                contentDescription = "Active Call",
+                                contentDescription = stringResource(R.string.active_call_content_description),
                                 tint = OnPrimaryContainer,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = if (callerName.isNotBlank()) callerName else "Ongoing Call",
+                                text = ongoingCall.displayName.ifBlank {
+                                    stringResource(R.string.ongoing_call_label)
+                                },
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = callDuration,
+                                text = ongoingCall.durationText,
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                             )
                         }
