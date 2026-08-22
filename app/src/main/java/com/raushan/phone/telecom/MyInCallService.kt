@@ -122,6 +122,7 @@ class MyInCallService : InCallService(), InCallController {
         avatarCache.clear()
         presentedCallIds.clear()
         stopCallForeground()
+        CallActionDispatcher.reset()
         CallRepository.detachController(this)
         CallRepository.clear()
     }

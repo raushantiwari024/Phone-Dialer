@@ -4,8 +4,11 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.raushan.phone.telecom.CallAction
+import com.raushan.phone.telecom.CallActionDispatcher
 import com.raushan.phone.telecom.CallRepository
 import com.raushan.phone.telecom.TelecomHelper
+import com.raushan.phone.telecom.model.AudioRoute
 import com.raushan.phone.telecom.model.CallDuration
 import com.raushan.phone.telecom.model.CallModel
 import com.raushan.phone.telecom.model.CallSessionState
@@ -73,31 +76,45 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Translates a UI action into a canonical [CallAction] and dispatches it.
+     *
+     * This function decides only which action the tap means; [CallActionDispatcher] decides what
+     * happens. That is what keeps the popup and the notification in lockstep — previously this branched
+     * over three different [TelecomHelper] methods while the notification called a fourth.
+     */
     fun onAction(action: InCallAction) {
         val session = CallRepository.state.value
         when (action) {
-            InCallAction.Answer -> answer(session)
+            InCallAction.Answer -> dispatchAnswer(session)
 
-            InCallAction.AnswerHoldingCurrent ->
-                session.ringingCall?.let { telecomHelper.answerAndHoldActive(it.id) }
+            InCallAction.AnswerHoldingCurrent -> session.ringingCall?.let {
+                dispatch(CallAction.AnswerIncomingAndHoldCurrent(it.id))
+            }
 
-            InCallAction.AnswerEndingCurrent ->
-                session.ringingCall?.let { telecomHelper.answerAndEndActive(it.id) }
+            InCallAction.AnswerEndingCurrent -> session.ringingCall?.let {
+                dispatch(CallAction.AnswerIncomingAndEndCurrent(it.id))
+            }
 
-            InCallAction.Decline ->
-                session.ringingCall?.let { telecomHelper.rejectCall(it.id) }
+            InCallAction.Decline -> session.ringingCall?.let {
+                dispatch(CallAction.DeclineIncoming(it.id))
+            }
 
             InCallAction.EndCall -> endCall(session)
 
-            InCallAction.ToggleMute -> telecomHelper.toggleMute()
+            InCallAction.ToggleMute -> dispatch(CallAction.SetMuted(!session.audio.isMuted))
 
-            InCallAction.ToggleSpeaker -> telecomHelper.toggleSpeaker()
+            InCallAction.ToggleSpeaker -> dispatch(
+                CallAction.SetAudioRoute(
+                    if (session.audio.isSpeakerOn) session.audio.defaultEarRoute else AudioRoute.SPEAKER,
+                ),
+            )
 
             InCallAction.ToggleHold -> toggleHold(session)
 
-            InCallAction.Swap -> telecomHelper.swapCalls()
+            InCallAction.Swap -> dispatch(CallAction.Swap)
 
-            InCallAction.Merge -> telecomHelper.mergeCalls()
+            InCallAction.Merge -> dispatch(CallAction.Merge)
 
             InCallAction.ShowDialpad -> dialpadVisible.value = true
 
@@ -116,12 +133,33 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun dispatch(action: CallAction) {
+        CallActionDispatcher.dispatch(telecomHelper, action)
+    }
+
+    /**
+     * Plain "Answer".
+     *
+     * Answering holds the current call. The one exception is a call that reports it cannot be held,
+     * where holding is impossible and ending is the only way to accept — the UI hides "Hold & Accept"
+     * in that case, and this keeps the bare Answer path consistent with it.
+     */
+    private fun dispatchAnswer(session: CallSessionState) {
+        val ringing = session.ringingCall ?: return
+        dispatch(
+            if (session.mustEndActiveToAnswer) {
+                CallAction.AnswerIncomingAndEndCurrent(ringing.id)
+            } else {
+                CallAction.AnswerIncomingAndHoldCurrent(ringing.id)
+            },
+        )
+    }
+
     /**
      * Starts a DTMF tone.
      *
-     * Tones are sent on the call Telecom considers active, which during an IVR call is the only call.
      * Falls back to the primary call so a state Telecom has not settled yet cannot silently swallow a
-     * keypress.
+     * keypress; the resolver still rejects the tone if the call is not actually connected.
      */
     private fun startDtmf(session: CallSessionState, digit: Char) {
         val target = session.activeCall ?: session.primaryCall
@@ -132,18 +170,16 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         dtmfStopJob?.cancel()
         dtmfStartedAtMillis = System.currentTimeMillis()
         dtmfCallId = target.id
-        Log.d(TAG, "DTMF start '$digit' on ${target.id} (state=${target.state})")
-        telecomHelper.playDtmfTone(target.id, digit)
+        dispatch(CallAction.PlayDtmf(target.id, digit))
         dialpadDigits.value += digit
     }
 
     /**
      * Stops the tone, but never before [MIN_DTMF_DURATION_MS] has elapsed.
      *
-     * This is the fix for tones not registering with an IVR. Playback was press-and-hold, so a quick
-     * tap started and stopped the tone within a few tens of milliseconds — far below the ~70ms minimum
-     * the DTMF standard requires, and well below what real IVR systems reliably detect. Holding the
-     * tone for a floor duration makes a tap behave like a deliberate keypress.
+     * Playback is press-and-hold, so a quick tap would otherwise start and stop the tone within a few
+     * tens of milliseconds — below the ~70ms the DTMF standard requires and well below what real IVR
+     * systems detect. Holding a floor duration makes a tap behave like a deliberate keypress.
      */
     private fun stopDtmf(session: CallSessionState) {
         val callId = dtmfCallId ?: session.activeCall?.id ?: return
@@ -151,28 +187,15 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         val remaining = (MIN_DTMF_DURATION_MS - elapsed).coerceAtLeast(0L)
         dtmfStopJob = viewModelScope.launch {
             if (remaining > 0L) delay(remaining)
-            telecomHelper.stopDtmfTone(callId)
+            dispatch(CallAction.StopDtmf(callId))
             dtmfCallId = null
         }
     }
 
-    private fun answer(session: CallSessionState) {
-        val ringing = session.ringingCall ?: return
-        if (session.mustEndActiveToAnswer) {
-            telecomHelper.answerAndEndActive(ringing.id)
-        } else {
-            telecomHelper.answerCall(ringing.id)
-        }
-    }
-
-    /** A ringing call is rejected; anything else is disconnected. */
+    /** Hang up. The resolver rejects a ringing call and disconnects anything else. */
     private fun endCall(session: CallSessionState) {
         val target = session.primaryCall ?: session.ringingCall ?: return
-        if (target.isRinging) {
-            telecomHelper.rejectCall(target.id)
-        } else {
-            telecomHelper.endCall(target.id)
-        }
+        dispatch(CallAction.EndCall(target.id))
     }
 
     private fun toggleHold(session: CallSessionState) {
@@ -180,9 +203,9 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         val active = session.activeCall
         when {
             // With two calls the control means swap, not hold.
-            held != null && active != null -> telecomHelper.swapCalls()
-            held != null -> telecomHelper.unholdCall(held.id)
-            active != null -> telecomHelper.holdCall(active.id)
+            held != null && active != null -> dispatch(CallAction.Swap)
+            held != null -> dispatch(CallAction.Unhold(held.id))
+            active != null -> dispatch(CallAction.Hold(active.id))
         }
     }
 

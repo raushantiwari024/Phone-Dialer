@@ -93,6 +93,20 @@ data class CallSessionState(
     val mustEndActiveToAnswer: Boolean =
         ringingCall != null && activeCall != null && !activeCall.capabilities.canHold
 
+    /**
+     * The explicit session phase.
+     *
+     * The single value both the notification layer and the UI branch on, so there is no way for them
+     * to hold different opinions about whether a call is waiting.
+     */
+    val phase: CallPhase = when {
+        !hasCalls -> CallPhase.Idle
+        ringingCall != null && (activeCall != null || heldCall != null) -> CallPhase.CallWaiting
+        ringingCall != null -> CallPhase.IncomingOnly
+        activeCall != null && heldCall != null -> CallPhase.TwoCalls
+        else -> CallPhase.SingleCall
+    }
+
     /** Conference members, keyed by their parent call id. */
     val conferenceChildrenOf: Map<String, List<CallModel>> =
         calls.filter { it.isConferenceChild }.groupBy { it.parentId.orEmpty() }

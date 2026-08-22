@@ -6,7 +6,7 @@ package com.raushan.phone.telecom.model
  * [CallModel] has a wide constructor because it snapshots everything the framework exposes; tests only
  * ever care about two or three fields, so everything else gets a neutral default here.
  */
-internal fun callModel(
+fun callModel(
     id: String,
     state: CallState,
     number: String = "+15551234567",

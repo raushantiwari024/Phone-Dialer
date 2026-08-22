@@ -90,10 +90,13 @@ class TelecomHelper(private val context: Context) {
     /**
      * Answers a call.
      *
-     * Deliberately does **not** hold the existing active call first. Telecom and the
-     * `ConnectionService` auto-hold it; issuing our own `hold()` beforehand races that in-flight hold,
-     * and some `ConnectionService` implementations then reject the answer outright. Use
-     * [answerAndEndActive] when the active call reports it cannot be held.
+     * A primitive: it answers and nothing else. Deliberately does **not** hold the existing active call
+     * first — Telecom and the `ConnectionService` auto-hold it, and issuing our own `hold()` beforehand
+     * races that in-flight hold, after which some `ConnectionService` implementations reject the answer
+     * outright.
+     *
+     * Composing this with ending another call is [CallActionDispatcher]'s job, driven by
+     * [CallAction.AnswerIncomingAndEndCurrent].
      */
     fun answerCall(callId: String) {
         CallRepository.rawCall(callId)?.answer(VideoProfile.STATE_AUDIO_ONLY)
@@ -143,18 +146,10 @@ class TelecomHelper(private val context: Context) {
 
     // --- multiple calls ---
 
-    /** Answers the ringing call, hanging up the current one first. Required when it cannot be held. */
-    fun answerAndEndActive(ringingCallId: String) {
-        val session = CallRepository.state.value
-        val current = session.activeCall ?: session.outgoingCall
-        current?.let { CallRepository.rawCall(it.id)?.disconnect() }
-        answerCall(ringingCallId)
-    }
-
-    /** Answers the ringing call and lets Telecom put the current one on hold. */
-    fun answerAndHoldActive(ringingCallId: String) {
-        answerCall(ringingCallId)
-    }
+    // answerAndEndActive / answerAndHoldActive lived here. They encoded a multi-call transition inside
+    // the primitive-operation wrapper, which is how the notification and the popup ended up with
+    // different answer behaviour. Composing transitions is now CallActionDispatcher's job; this class
+    // exposes only primitives.
 
     /**
      * Swaps the active and held calls.

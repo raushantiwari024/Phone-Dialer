@@ -84,7 +84,9 @@ internal class CallNotificationManager(private val context: Context) {
             // full-screen intent or degrade it to a heads-up notification, which is exactly the
             // behaviour we want and previously fought.
             .setContentIntent(InCallIntents.contentIntent(context, call.id))
-            .setDeleteIntent(CallActionReceiver.declineIntent(context, call.id))
+            // No deleteIntent. It used to be the decline action, so anything that removed this
+            // notification — including the system doing so — silently rejected the call. Dismissal is
+            // not a decision; the call keeps ringing and the in-app UI stays authoritative.
             .setStyle(style)
             // Deliberately NOT setOnlyAlertOnce here. A full-screen intent is delivered as part of
             // alerting, and this notification is re-posted whenever details or the avatar resolve, so
