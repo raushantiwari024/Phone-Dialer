@@ -17,8 +17,12 @@
     <!-- Required from API 31 to enumerate Bluetooth audio devices and read their names. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
-    <!-- Improves the reliability of waking the screen for an incoming call on some OEM builds. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      Required from Android 15 for android:turnScreenOn / Activity.setTurnScreenOn to have any effect.
+      Without it an app targeting SDK 35+ cannot wake the display for an incoming call.
+    -->
+    <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
 
     <application
         android:name=".DialerApplication"

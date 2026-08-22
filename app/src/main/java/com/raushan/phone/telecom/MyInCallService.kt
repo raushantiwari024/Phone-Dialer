@@ -1,5 +1,6 @@
 package com.raushan.phone.telecom
 
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.bluetooth.BluetoothDevice
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
@@ -54,6 +56,9 @@ class MyInCallService : InCallService(), InCallController {
     private val callbacks = HashMap<Call, Call.Callback>()
 
     private val contactJobs = HashMap<String, Job>()
+
+    /** Guards against re-launching the call screen on every republish of the same ringing call. */
+    private val presentedCallIds = mutableSetOf<String>()
 
     /** Service-local, not part of [CallModel]: a Bitmap is mutable and would break `@Immutable`. */
     private val avatarCache = HashMap<String, IconCompat>()
@@ -115,6 +120,7 @@ class MyInCallService : InCallService(), InCallController {
         contactJobs.values.forEach(Job::cancel)
         contactJobs.clear()
         avatarCache.clear()
+        presentedCallIds.clear()
         stopCallForeground()
         CallRepository.detachController(this)
         CallRepository.clear()
@@ -135,6 +141,63 @@ class MyInCallService : InCallService(), InCallController {
         republish(call)
         resolveContact(call, id)
         refreshNotification()
+        presentIncomingCallIfNeeded(id)
+    }
+
+    /**
+     * Brings the call screen up directly when the device is locked or the screen is off.
+     *
+     * Belt and braces alongside the notification's full-screen intent, not a replacement for it. The
+     * full-screen intent is the documented path and is launched by the platform, but it can be
+     * suppressed in practice: the app may lack the full-screen-intent appop on API 34+, and several
+     * OEM skins throttle it aggressively. Relying on it alone means an incoming call can ring with a
+     * black screen, which is exactly the symptom reported.
+     *
+     * A direct start works here because Telecom binds this service from the system, which carries a
+     * background-activity-launch exemption. Wrapped in [runCatching] regardless, since a blocked start
+     * must never take down call handling.
+     *
+     * The two-tier rule is preserved: this only fires when locked or the screen is off. With the device
+     * unlocked and another app in the foreground the app still does nothing and lets the system show
+     * its heads-up call banner.
+     */
+    private fun presentIncomingCallIfNeeded(callId: String) {
+        val model = CallRepository.modelOf(callId) ?: return
+        if (!model.isRinging) return
+        if (!presentedCallIds.add(callId)) return
+
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        val power = getSystemService(PowerManager::class.java)
+        val isLocked = keyguard?.isKeyguardLocked == true
+        val isScreenOff = power?.isInteractive == false
+
+        if (!isLocked && !isScreenOff) return
+
+        wakeScreen()
+        runCatching { startActivity(InCallIntents.callUi(this, callId)) }
+            .onFailure { Log.w(TAG, "Direct call UI launch blocked; relying on full-screen intent", it) }
+    }
+
+    /**
+     * Forces the display on for an incoming call.
+     *
+     * From Android 15 `turnScreenOn` needs the `TURN_SCREEN_ON` permission, and if that is not granted
+     * the activity alone cannot wake the display. These wake-lock flags are deprecated but still
+     * functional, and are the long-standing fallback dialers use for precisely this case. Released on
+     * a short timeout so it can never pin the screen on.
+     */
+    @Suppress("DEPRECATION")
+    private fun wakeScreen() {
+        val power = getSystemService(PowerManager::class.java) ?: return
+        if (power.isInteractive) return
+        runCatching {
+            power.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE,
+                WAKE_LOCK_TAG,
+            ).acquire(WAKE_LOCK_TIMEOUT_MS)
+        }.onFailure { Log.w(TAG, "Could not wake the screen", it) }
     }
 
     override fun onCallRemoved(call: Call) {
@@ -146,6 +209,7 @@ class MyInCallService : InCallService(), InCallController {
         id?.let {
             contactJobs.remove(it)?.cancel()
             avatarCache.remove(it)
+            presentedCallIds.remove(it)
         }
         CallRepository.removeCall(call)
         refreshNotification()
@@ -245,6 +309,10 @@ class MyInCallService : InCallService(), InCallController {
         }
         CallRepository.putCall(call, mapper.map(call, id, contact, CallRepository::idOf))
         refreshNotification()
+        // Also checked on every state change, not just onCallAdded: Telecom frequently adds a call in
+        // STATE_NEW and only transitions it to STATE_RINGING a moment later, so testing once at add
+        // time misses it entirely. presentedCallIds keeps this idempotent.
+        presentIncomingCallIfNeeded(id)
     }
 
     /**
@@ -398,5 +466,7 @@ class MyInCallService : InCallService(), InCallController {
 
     private companion object {
         private const val TAG = "MyInCallService"
+        private const val WAKE_LOCK_TAG = "com.raushan.phone:incoming-call"
+        private const val WAKE_LOCK_TIMEOUT_MS = 10_000L
     }
 }
