@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +42,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -88,11 +91,21 @@ fun activeCallContent(
 
                 state.secondary?.let { other ->
                     Spacer(modifier = Modifier.height(20.dp))
-                    secondCallBanner(
-                        call = other,
-                        canSwap = state.canSwap,
-                        onSwap = { onAction(InCallAction.Swap) },
-                    )
+                    if (other.state.isRinging) {
+                        callWaitingBanner(
+                            call = other,
+                            mustEndActiveToAnswer = state.mustEndActiveToAnswer,
+                            onDecline = { onAction(InCallAction.Decline) },
+                            onAnswerHolding = { onAction(InCallAction.AnswerHoldingCurrent) },
+                            onAnswerEnding = { onAction(InCallAction.AnswerEndingCurrent) },
+                        )
+                    } else {
+                        heldCallBanner(
+                            call = other,
+                            canSwap = state.canSwap,
+                            onSwap = { onAction(InCallAction.Swap) },
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
@@ -254,10 +267,139 @@ private fun primaryControlRow(
     }
 }
 
-/** The other line during call waiting or after a swap. */
+/**
+ * A second caller arriving while a call is already in progress.
+ *
+ * Sits over the active call rather than replacing it: the person already on the line stays on screen,
+ * and their audio is untouched while the user decides.
+ *
+ * "Hold & Accept" is hidden when the current call reports it cannot be held — some carrier and radio
+ * configurations do — leaving "End & Accept" as the only honest option rather than offering an action
+ * that would silently fail.
+ */
 @Composable
 @Suppress("FunctionName")
-private fun secondCallBanner(
+private fun callWaitingBanner(
+    call: CallCardUiState,
+    mustEndActiveToAnswer: Boolean,
+    onDecline: () -> Unit,
+    onAnswerHolding: () -> Unit,
+    onAnswerEnding: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptics = LocalHapticFeedback.current
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = callColors.glassFill,
+        border = BorderStroke(1.dp, callColors.glassBorder),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                callerAvatar(call = call, size = 40.dp)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = call.displayName,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = stringResource(R.string.call_status_call_waiting),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                bannerAction(
+                    label = stringResource(R.string.decline_label),
+                    containerColor = callColors.decline,
+                    contentColor = callColors.onDecline,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onDecline()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+
+                if (!mustEndActiveToAnswer) {
+                    bannerAction(
+                        label = stringResource(R.string.answer_and_hold_label),
+                        containerColor = callColors.accept,
+                        contentColor = callColors.onAccept,
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAnswerHolding()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                bannerAction(
+                    label = stringResource(R.string.answer_and_end_label),
+                    containerColor = if (mustEndActiveToAnswer) {
+                        callColors.accept
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    contentColor = if (mustEndActiveToAnswer) {
+                        callColors.onAccept
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onAnswerEnding()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+@Suppress("FunctionName")
+private fun bannerAction(
+    label: String,
+    containerColor: androidx.compose.ui.graphics.Color,
+    contentColor: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = containerColor,
+        contentColor = contentColor,
+        onClick = onClick,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
+        )
+    }
+}
+
+/** The other line once it is on hold, after answering a waiting call or swapping. */
+@Composable
+@Suppress("FunctionName")
+private fun heldCallBanner(
     call: CallCardUiState,
     canSwap: Boolean,
     onSwap: () -> Unit,
@@ -359,6 +501,67 @@ fun callActionButton(
 
 private const val DISABLED_CONTAINER_ALPHA = 0.3f
 private const val DISABLED_CONTENT_ALPHA = 0.38f
+
+@Preview
+@Composable
+@Suppress("FunctionName")
+private fun callWaitingPreview() {
+    PhoneTheme {
+        activeCallContent(
+            state = InCallUiState(
+                mode = InCallUiState.Mode.IncomingWhileOngoing,
+                primary = CallCardUiState(
+                    callId = "c1",
+                    displayName = "Aaron Miller",
+                    number = "+1 555 0123",
+                    photoUri = null,
+                    state = CallState.ACTIVE,
+                    durationText = "04:12",
+                ),
+                secondary = CallCardUiState(
+                    callId = "c2",
+                    displayName = "Priya Sharma",
+                    number = "+1 555 0456",
+                    photoUri = null,
+                    state = CallState.RINGING,
+                ),
+                canHold = true,
+            ),
+            onAction = {},
+        )
+    }
+}
+
+@Preview
+@Composable
+@Suppress("FunctionName")
+private fun twoOngoingPreview() {
+    PhoneTheme {
+        activeCallContent(
+            state = InCallUiState(
+                mode = InCallUiState.Mode.TwoOngoing,
+                primary = CallCardUiState(
+                    callId = "c2",
+                    displayName = "Priya Sharma",
+                    number = "+1 555 0456",
+                    photoUri = null,
+                    state = CallState.ACTIVE,
+                    durationText = "00:31",
+                ),
+                secondary = CallCardUiState(
+                    callId = "c1",
+                    displayName = "Aaron Miller",
+                    number = "+1 555 0123",
+                    photoUri = null,
+                    state = CallState.HOLDING,
+                ),
+                canSwap = true,
+                canHold = true,
+            ),
+            onAction = {},
+        )
+    }
+}
 
 @Preview
 @Composable

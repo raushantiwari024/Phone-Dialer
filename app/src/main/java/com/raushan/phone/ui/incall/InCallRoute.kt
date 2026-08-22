@@ -61,10 +61,13 @@ fun inCallRoute(
         label = "inCallMode",
     ) { mode ->
         when (mode) {
-            InCallUiState.Mode.Incoming,
-            InCallUiState.Mode.IncomingWhileOngoing,
-            -> incomingCallScreen(viewModel = viewModel)
+            InCallUiState.Mode.Incoming -> incomingCallScreen(viewModel = viewModel)
 
+            // Call waiting stays on the active call screen with a banner for the new caller.
+            // IncomingWhileOngoing used to route to the incoming screen, which renders `primary` — and
+            // during call waiting `primary` is the call already in progress, so it showed the person
+            // you were talking to behind an Answer button.
+            InCallUiState.Mode.IncomingWhileOngoing,
             InCallUiState.Mode.Ongoing,
             InCallUiState.Mode.TwoOngoing,
             -> activeCallScreen(viewModel = viewModel)
