@@ -32,10 +32,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raushan.phone.R
-import com.raushan.phone.ui.theme.AvatarSurface
-import com.raushan.phone.ui.theme.OnSurface
-import com.raushan.phone.ui.theme.OnSurfaceVariant
-import com.raushan.phone.ui.theme.OutlineVariant
 
 /**
  * In-call keypad for sending DTMF tones, e.g. navigating an IVR menu.
@@ -66,7 +62,7 @@ fun inCallDialpad(
             Text(
                 text = digits,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                color = OnSurface,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Start,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -76,7 +72,7 @@ fun inCallDialpad(
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = stringResource(R.string.keypad_label),
-                    tint = OnSurfaceVariant,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -122,14 +118,14 @@ private fun dtmfKey(
                 )
             },
         shape = CircleShape,
-        color = AvatarSurface.copy(alpha = 0.6f),
-        border = BorderStroke(1.dp, OutlineVariant.copy(alpha = 0.3f)),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.6f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
                 text = digit.toString(),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                color = OnSurface,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(4.dp),
             )
         }

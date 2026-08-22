@@ -25,8 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.raushan.phone.R
-import com.raushan.phone.ui.theme.Background
-import com.raushan.phone.ui.theme.OnSurfaceVariant
 import kotlinx.coroutines.delay
 
 /**
@@ -91,7 +89,7 @@ private fun callEndedContent(
     state: InCallUiState,
     modifier: Modifier = Modifier,
 ) {
-    Surface(modifier = modifier.fillMaxSize(), color = Background) {
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(contentAlignment = Alignment.Center) {
             Column(
                 modifier = Modifier.safeDrawingPadding(),
@@ -103,14 +101,14 @@ private fun callEndedContent(
                     Text(
                         text = call.displayName,
                         style = MaterialTheme.typography.headlineLarge,
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 Text(
                     text = stringResource(R.string.call_ended_label),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = OnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

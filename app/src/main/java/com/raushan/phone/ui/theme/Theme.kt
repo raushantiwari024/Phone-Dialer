@@ -10,7 +10,12 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -86,6 +91,47 @@ private val LightColorScheme = lightColorScheme(
     onErrorContainer = LightOnErrorContainer,
 )
 
+/**
+ * Call-screen colours that have no Material role.
+ *
+ * The glass fills and the accent glow are brand surfaces, and accept/decline are semantic rather than
+ * thematic. Carried in a [CompositionLocal] instead of imported as raw top-level values, which is what
+ * previously hard-locked the call screens to the dark palette.
+ */
+@Immutable
+data class CallColors(
+    val glassFill: Color,
+    val glassBorder: Color,
+    val accentGlow: Color,
+    val accept: Color,
+    val onAccept: Color,
+    val decline: Color,
+    val onDecline: Color,
+)
+
+private val DarkCallColors = CallColors(
+    glassFill = GlassFill,
+    glassBorder = GlassBorder,
+    accentGlow = CallAccentGlow,
+    accept = AcceptGreen,
+    onAccept = OnAcceptGreen,
+    decline = DeclineRed,
+    onDecline = OnDeclineRed,
+)
+
+private val LightCallColors = DarkCallColors.copy(
+    glassFill = LightGlassFill,
+    glassBorder = LightGlassBorder,
+)
+
+private val LocalCallColors = staticCompositionLocalOf { DarkCallColors }
+
+/** Accessor for [CallColors] inside the theme. */
+val callColors: CallColors
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalCallColors.current
+
 val AppShapes = Shapes(
     extraSmall = RoundedCornerShape(4.dp),
     small = RoundedCornerShape(8.dp),
@@ -115,12 +161,16 @@ fun PhoneTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        shapes = AppShapes,
-        content = content,
-    )
+    CompositionLocalProvider(
+        LocalCallColors provides if (darkTheme) DarkCallColors else LightCallColors,
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            shapes = AppShapes,
+            content = content,
+        )
+    }
 }
 
 /**

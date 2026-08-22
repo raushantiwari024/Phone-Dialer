@@ -48,19 +48,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.raushan.phone.R
 import com.raushan.phone.telecom.model.CallState
-import com.raushan.phone.ui.theme.AvatarSurface
-import com.raushan.phone.ui.theme.Background
-import com.raushan.phone.ui.theme.CallAccentGlow
-import com.raushan.phone.ui.theme.DeclineRed
-import com.raushan.phone.ui.theme.ElectricBlue
-import com.raushan.phone.ui.theme.GlassBorder
-import com.raushan.phone.ui.theme.GlassFill
-import com.raushan.phone.ui.theme.OnDeclineRed
-import com.raushan.phone.ui.theme.OnPrimaryContainer
-import com.raushan.phone.ui.theme.OnSurface
-import com.raushan.phone.ui.theme.OnSurfaceVariant
-import com.raushan.phone.ui.theme.OutlineVariant
 import com.raushan.phone.ui.theme.PhoneTheme
+import com.raushan.phone.ui.theme.callColors
 
 @Composable
 @Suppress("FunctionName")
@@ -80,11 +69,11 @@ fun activeCallContent(
 ) {
     val call = state.primary ?: return
 
-    Surface(modifier = modifier.fillMaxSize(), color = Background) {
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(brush = Brush.verticalGradient(listOf(CallAccentGlow, Background))),
+                .background(brush = Brush.verticalGradient(listOf(callColors.accentGlow, MaterialTheme.colorScheme.background))),
         ) {
             Column(
                 modifier = Modifier
@@ -231,8 +220,8 @@ private fun primaryControlRow(
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     onAction(InCallAction.EndCall)
                 },
-                containerColor = DeclineRed,
-                contentColor = OnDeclineRed,
+                containerColor = callColors.decline,
+                contentColor = callColors.onDecline,
                 shape = CircleShape,
                 modifier = Modifier.size(80.dp),
             ) {
@@ -246,7 +235,7 @@ private fun primaryControlRow(
             Text(
                 text = stringResource(R.string.hang_up_label),
                 style = MaterialTheme.typography.labelLarge,
-                color = OnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -277,8 +266,8 @@ private fun secondCallBanner(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        color = GlassFill,
-        border = BorderStroke(1.dp, GlassBorder),
+        color = callColors.glassFill,
+        border = BorderStroke(1.dp, callColors.glassBorder),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -290,7 +279,7 @@ private fun secondCallBanner(
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
-                    color = OnSurface,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     text = stringResource(
@@ -301,7 +290,7 @@ private fun secondCallBanner(
                         },
                     ),
                     style = MaterialTheme.typography.labelMedium,
-                    color = OnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (canSwap) {
@@ -339,11 +328,11 @@ fun callActionButton(
             modifier = Modifier.size(size),
             shape = CircleShape,
             color = when {
-                !enabled -> AvatarSurface.copy(alpha = DISABLED_CONTAINER_ALPHA)
-                isActive -> ElectricBlue
-                else -> AvatarSurface.copy(alpha = 0.6f)
+                !enabled -> MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = DISABLED_CONTAINER_ALPHA)
+                isActive -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.6f)
             },
-            border = BorderStroke(1.dp, OutlineVariant.copy(alpha = 0.3f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
             enabled = enabled,
             onClick = onClick,
         ) {
@@ -352,9 +341,9 @@ fun callActionButton(
                     imageVector = icon,
                     contentDescription = label,
                     tint = when {
-                        !enabled -> OnSurface.copy(alpha = DISABLED_CONTENT_ALPHA)
-                        isActive -> OnPrimaryContainer
-                        else -> OnSurface
+                        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = DISABLED_CONTENT_ALPHA)
+                        isActive -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.onSurface
                     },
                 )
             }
@@ -363,7 +352,7 @@ fun callActionButton(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = if (enabled) OnSurfaceVariant else OnSurfaceVariant.copy(alpha = DISABLED_CONTENT_ALPHA),
+            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = DISABLED_CONTENT_ALPHA),
         )
     }
 }

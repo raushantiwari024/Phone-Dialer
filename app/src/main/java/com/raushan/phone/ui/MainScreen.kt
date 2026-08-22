@@ -51,8 +51,6 @@ import com.raushan.phone.telecom.CallUiCoordinator
 import com.raushan.phone.telecom.TelecomHelper
 import com.raushan.phone.ui.incall.InCallActivity
 import com.raushan.phone.ui.theme.PhoneTheme
-import com.raushan.phone.ui.theme.ElectricBlue
-import com.raushan.phone.ui.theme.OnPrimaryContainer
 import com.raushan.phone.ui.calllog.callLogScreen
 import com.raushan.phone.ui.contacts.ContactDetailScreen
 import com.raushan.phone.ui.contacts.ContactsScreen
@@ -105,8 +103,8 @@ fun mainScreen(
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                                 )
                             },
-                        color = ElectricBlue,
-                        contentColor = OnPrimaryContainer
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ) {
                         Row(
                             modifier = Modifier
@@ -116,7 +114,7 @@ fun mainScreen(
                             Icon(
                                 imageVector = Icons.Default.Call,
                                 contentDescription = stringResource(R.string.active_call_content_description),
-                                tint = OnPrimaryContainer,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))

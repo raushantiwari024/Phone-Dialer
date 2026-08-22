@@ -73,20 +73,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.raushan.phone.R
 import com.raushan.phone.telecom.model.CallState
-import com.raushan.phone.ui.theme.AcceptGreen
-import com.raushan.phone.ui.theme.AvatarSurface
-import com.raushan.phone.ui.theme.Background
-import com.raushan.phone.ui.theme.CallAccentGlow
-import com.raushan.phone.ui.theme.DeclineRed
-import com.raushan.phone.ui.theme.ElectricBlue
-import com.raushan.phone.ui.theme.GlassBorder
-import com.raushan.phone.ui.theme.GlassFill
-import com.raushan.phone.ui.theme.OnAcceptGreen
-import com.raushan.phone.ui.theme.OnDeclineRed
-import com.raushan.phone.ui.theme.OnSurface
-import com.raushan.phone.ui.theme.OnSurfaceVariant
-import com.raushan.phone.ui.theme.OutlineVariant
 import com.raushan.phone.ui.theme.PhoneTheme
+import com.raushan.phone.ui.theme.callColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,11 +110,11 @@ fun incomingCallContent(
 ) {
     val call = state.primary ?: return
 
-    Surface(modifier = modifier.fillMaxSize(), color = Background) {
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(brush = Brush.verticalGradient(listOf(CallAccentGlow, Background))),
+                .background(brush = Brush.verticalGradient(listOf(callColors.accentGlow, MaterialTheme.colorScheme.background))),
         ) {
             Column(
                 modifier = Modifier
@@ -227,7 +215,7 @@ private fun swipeToAnswerControl(
         Icon(
             imageVector = Icons.Default.KeyboardArrowUp,
             contentDescription = null,
-            tint = AcceptGreen,
+            tint = callColors.accept,
             modifier = Modifier
                 .size(28.dp)
                 .graphicsLayer {
@@ -239,7 +227,7 @@ private fun swipeToAnswerControl(
         Text(
             text = stringResource(R.string.swipe_up_to_answer),
             style = MaterialTheme.typography.labelMedium,
-            color = OnSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .padding(vertical = 8.dp)
                 // Fade the opposite hint out as the drag commits to a direction.
@@ -249,11 +237,11 @@ private fun swipeToAnswerControl(
         Surface(
             shape = CircleShape,
             color = when {
-                progressUp > COMMIT_TINT_AT -> AcceptGreen
-                progressDown > COMMIT_TINT_AT -> DeclineRed
-                else -> AvatarSurface
+                progressUp > COMMIT_TINT_AT -> callColors.accept
+                progressDown > COMMIT_TINT_AT -> callColors.decline
+                else -> MaterialTheme.colorScheme.surfaceContainerLowest
             },
-            border = BorderStroke(1.dp, OutlineVariant),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier
                 .size(HANDLE_SIZE)
                 .graphicsLayer {
@@ -312,7 +300,7 @@ private fun swipeToAnswerControl(
                         Icons.Default.Call
                     },
                     contentDescription = stringResource(R.string.answer_handle_content_description),
-                    tint = if (progress > COMMIT_TINT_AT) OnAcceptGreen else OnSurface,
+                    tint = if (progress > COMMIT_TINT_AT) callColors.onAccept else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(34.dp),
                 )
             }
@@ -321,7 +309,7 @@ private fun swipeToAnswerControl(
         Text(
             text = stringResource(R.string.swipe_down_to_decline),
             style = MaterialTheme.typography.labelMedium,
-            color = OnSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .padding(vertical = 8.dp)
                 .graphicsLayer { alpha = 1f - progressUp },
@@ -330,7 +318,7 @@ private fun swipeToAnswerControl(
         Icon(
             imageVector = Icons.Default.KeyboardArrowDown,
             contentDescription = null,
-            tint = DeclineRed,
+            tint = callColors.decline,
             modifier = Modifier
                 .size(28.dp)
                 .graphicsLayer {
@@ -360,8 +348,8 @@ private fun answerDeclineButtons(
         labelledCallFab(
             icon = Icons.Default.CallEnd,
             label = stringResource(R.string.decline_label),
-            containerColor = DeclineRed,
-            contentColor = OnDeclineRed,
+            containerColor = callColors.decline,
+            contentColor = callColors.onDecline,
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 onDecline()
@@ -370,8 +358,8 @@ private fun answerDeclineButtons(
         labelledCallFab(
             icon = Icons.Default.Call,
             label = stringResource(R.string.answer_label),
-            containerColor = AcceptGreen,
-            contentColor = OnAcceptGreen,
+            containerColor = callColors.accept,
+            contentColor = callColors.onAccept,
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 onAnswer()
@@ -401,7 +389,7 @@ private fun labelledCallFab(
             Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(36.dp))
         }
         Spacer(modifier = Modifier.height(12.dp))
-        Text(text = label, style = MaterialTheme.typography.labelLarge, color = OnSurfaceVariant)
+        Text(text = label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -414,8 +402,8 @@ private fun quickReplyButton(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
-        color = GlassFill,
-        border = BorderStroke(1.dp, GlassBorder),
+        color = callColors.glassFill,
+        border = BorderStroke(1.dp, callColors.glassBorder),
     ) {
         Column(
             modifier = Modifier
@@ -426,14 +414,14 @@ private fun quickReplyButton(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Message,
                 contentDescription = null,
-                tint = ElectricBlue,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp),
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = stringResource(R.string.reply_with_message),
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = OnSurface,
+                color = MaterialTheme.colorScheme.onSurface,
             )
         }
     }
@@ -449,7 +437,7 @@ internal fun callerHeader(labelRes: Int, modifier: Modifier = Modifier) {
         Icon(
             imageVector = Icons.Default.Call,
             contentDescription = null,
-            tint = ElectricBlue,
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
         )
         Spacer(modifier = Modifier.height(4.dp))
@@ -459,7 +447,7 @@ internal fun callerHeader(labelRes: Int, modifier: Modifier = Modifier) {
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 2.sp,
             ),
-            color = OnSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -504,7 +492,7 @@ internal fun callerIdentity(
                             scaleY = scale
                             alpha = pulseAlpha
                         }
-                        .background(color = ElectricBlue, shape = CircleShape),
+                        .background(color = MaterialTheme.colorScheme.primary, shape = CircleShape),
                 )
             }
             callerAvatar(call = call, size = avatarSize)
@@ -515,7 +503,7 @@ internal fun callerIdentity(
         Text(
             text = call.displayName,
             style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
-            color = OnSurface,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
         )
 
@@ -524,7 +512,7 @@ internal fun callerIdentity(
         Text(
             text = call.secondaryLine(),
             style = MaterialTheme.typography.bodyLarge,
-            color = OnSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
     }
@@ -554,8 +542,8 @@ internal fun callerAvatar(
     Surface(
         modifier = modifier.size(size),
         shape = CircleShape,
-        color = AvatarSurface,
-        border = BorderStroke(4.dp, OutlineVariant),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(4.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (photo != null) {
@@ -571,7 +559,7 @@ internal fun callerAvatar(
                     style = MaterialTheme.typography.displayMedium.copy(
                         fontWeight = FontWeight.Bold,
                     ),
-                    color = OnSurface,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
