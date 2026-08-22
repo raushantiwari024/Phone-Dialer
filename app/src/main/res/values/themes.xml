@@ -2,14 +2,15 @@
 <resources>
 
     <!--
-      Parented to the dark framework theme, not Material.Light. The previous Light parent gave the
-      window a white background, so every cold start and every full-screen-intent call launch flashed
-      white before Compose drew its first frame — very visible when a call takes over the lock screen.
+      windowBackground is a colour resource with a values-night variant, so the frame painted before
+      Compose draws matches whichever scheme is active. It was previously whatever the framework parent
+      chose, which meant a white flash even in dark mode — very visible when a call took over the lock
+      screen.
     -->
-    <style name="Theme.Phone" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Phone" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Dark counterparts of the window backgrounds in values/colors.xml. -->
+    <color name="window_background">#FF131313</color>
+    <color name="incall_window_background">#FF131313</color>
+
+</resources>
