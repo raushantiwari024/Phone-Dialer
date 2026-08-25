@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.activity.ComponentActivity
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,18 +52,24 @@ import com.raushan.phone.telecom.CallUiCoordinator
 import com.raushan.phone.telecom.TelecomHelper
 import com.raushan.phone.ui.incall.InCallActivity
 import com.raushan.phone.ui.theme.PhoneTheme
-import com.raushan.phone.ui.calllog.callLogScreen
 import com.raushan.phone.ui.contacts.ContactDetailScreen
 import com.raushan.phone.ui.contacts.ContactsScreen
-import com.raushan.phone.ui.dialpad.DialpadScreen
-import com.raushan.phone.ui.dialpad.DialpadViewModel
 import com.raushan.phone.ui.incall.InCallViewModel
+import com.raushan.phone.ui.recents.recentsScreen
 import com.raushan.phone.ui.settings.SettingsScreen
 
-sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
-    object Dialpad : Screen("dialpad", "Calls", Icons.Default.Call)
-    object CallLog : Screen("calllog", "History", Icons.Default.History)
-    object Contacts : Screen("contacts", "Contacts", Icons.Default.Contacts)
+/**
+ * The app's two top-level destinations.
+ *
+ * Reduced from three. "History" and "Calls" were separate tabs showing the same call data from two
+ * angles, and the dial pad now lives on Recents as an overlay rather than as a tab of its own — so
+ * there is one place to see recent activity and one place to see people.
+ *
+ * Labels are string resources rather than literals so they can be localised.
+ */
+sealed class Screen(val route: String, @param:StringRes val labelRes: Int, val icon: ImageVector) {
+    data object Recents : Screen("recents", R.string.recents_tab, Icons.Default.History)
+    data object Contacts : Screen("contacts", R.string.contacts_tab, Icons.Default.Contacts)
 }
 
 @Composable
@@ -82,11 +89,7 @@ fun mainScreen(
     // The call screens no longer render here. They live in InCallActivity, which is the only surface
     // allowed to show over the keyguard. What remains is the minimised banner, which reopens it.
 
-    val items = listOf(
-        Screen.CallLog,
-        Screen.Dialpad,
-        Screen.Contacts
-    )
+    val items = listOf(Screen.Recents, Screen.Contacts)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -156,7 +159,7 @@ fun mainScreen(
 
                             NavigationBarItem(
                                 icon = { Icon(screen.icon, contentDescription = null) },
-                                label = { Text(screen.label) },
+                                label = { Text(stringResource(screen.labelRes)) },
                                 selected = isSelected,
                                 onClick = {
                                     navController.navigate(screen.route) {
@@ -180,62 +183,19 @@ fun mainScreen(
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = "dialpad?prefilled={prefilled}",
+                // Recents is where the app opens.
+                startDestination = Screen.Recents.route,
                 modifier = Modifier.padding(innerPadding)
             ) {
-                composable(
-                    route = "dialpad?prefilled={prefilled}",
-                    arguments = listOf(navArgument("prefilled") {
-                        type = NavType.StringType
-                        nullable = true
-                        defaultValue = null
-                    })
-                ) { backStackEntry ->
-                    val prefilled = backStackEntry.arguments?.getString("prefilled")
-                    val dialpadViewModel: DialpadViewModel = viewModel()
-                    LaunchedEffect(prefilled) {
-                        if (!prefilled.isNullOrBlank()) {
-                            dialpadViewModel.onPhoneNumberChange(
-                                TextFieldValue(
-                                    text = prefilled,
-                                    selection = TextRange(prefilled.length)
-                                )
-                            )
-                        }
-                    }
-                    DialpadScreen(
-                        viewModel = dialpadViewModel,
-                        onCallClick = { number ->
-                            if (number.isNotEmpty()) {
-                                telecomHelper.makeCall(number)
-                            }
-                        }
-                    )
-                }
-
-                composable(Screen.CallLog.route) {
-                    callLogScreen(
+                composable(Screen.Recents.route) {
+                    recentsScreen(
                         onEntryClick = { entry ->
                             navController.navigate("contactDetail?phoneNumber=${entry.number}")
                         },
                         onCallClick = { number ->
-                            telecomHelper.makeCall(number)
+                            if (number.isNotEmpty()) telecomHelper.makeCall(number)
                         },
-                        onEditBeforeCall = { number ->
-                            navController.navigate("dialpad?prefilled=$number")
-                        },
-                        onSettingsClick = {
-                            navController.navigate("settings")
-                        },
-                        onDialpadClick = {
-                            navController.navigate(Screen.Dialpad.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
+                        onSettingsClick = { navController.navigate("settings") },
                     )
                 }
 
