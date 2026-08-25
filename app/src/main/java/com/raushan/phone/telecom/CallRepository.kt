@@ -57,6 +57,7 @@ object CallRepository {
     private var canAddCall = false
     private var isServiceConnected = false
     private var isRingerSilenced = false
+    private var isCallUiVisible = false
 
     @Volatile
     private var controller: InCallController? = null
@@ -118,6 +119,18 @@ object CallRepository {
         publish()
     }
 
+    /**
+     * Reported by the call activity as it starts and stops.
+     *
+     * Public rather than internal because the UI layer owns this fact; everything else about the
+     * session comes from Telecom.
+     */
+    fun setCallUiVisible(value: Boolean) {
+        if (isCallUiVisible == value) return
+        isCallUiVisible = value
+        publish()
+    }
+
     internal fun setServiceConnected(value: Boolean) {
         if (isServiceConnected == value) return
         isServiceConnected = value
@@ -149,6 +162,7 @@ object CallRepository {
         canAddCall = false
         isRingerSilenced = false
         isServiceConnected = false
+        isCallUiVisible = false
         publish()
     }
 
@@ -176,6 +190,7 @@ object CallRepository {
             canAddCall = canAddCall,
             isServiceConnected = isServiceConnected,
             isRingerSilenced = isRingerSilenced,
+            isCallUiVisible = isCallUiVisible,
         )
     }
 

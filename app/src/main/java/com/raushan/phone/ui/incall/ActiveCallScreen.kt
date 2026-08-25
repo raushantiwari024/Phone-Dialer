@@ -18,8 +18,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.Mic
@@ -132,14 +134,18 @@ fun activeCallContent(
 }
 
 /**
- * Secondary controls: mute, add call, and hold or swap.
+ * Secondary controls: mute, add call, hold or swap, and merge.
  *
  * Speaker and the dialpad deliberately live in [primaryControlRow] instead, flanking hang up.
  *
- * There is no video control. The app has no video stack at all — no camera permission, no local
- * preview or remote render surfaces — so requesting a video upgrade would move the call into a video
- * session with nothing to display it, which is worse than omitting the control. The capability is
- * still carried on the call model, so restoring the button later is a UI-only change.
+ * Built from a list and chunked into rows rather than hard-coded into one Row, because the control set
+ * genuinely changes shape: with two calls up, Hold becomes Swap and Merge appears alongside it, and
+ * four 64dp buttons do not fit on one line on a narrow screen.
+ *
+ * There is no video control. The app has no video stack at all — no camera permission, no local preview
+ * or remote render surfaces — so requesting a video upgrade would move the call into a video session
+ * with nothing to display it. The capability is still carried on the call model, so restoring the
+ * button later is a UI-only change.
  */
 @Composable
 @Suppress("FunctionName")
@@ -149,54 +155,86 @@ private fun controlGrid(
     modifier: Modifier = Modifier,
 ) {
     val holdIsSwap = state.canSwap
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .widthIn(max = 400.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-    ) {
-        callActionButton(
-            icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-            label = stringResource(if (state.isMuted) R.string.muted_label else R.string.mute_label),
-            onClick = { onAction(InCallAction.ToggleMute) },
-            isActive = state.isMuted,
+    val controls = buildList {
+        add(
+            ControlSpec(
+                icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                labelRes = if (state.isMuted) R.string.muted_label else R.string.mute_label,
+                action = InCallAction.ToggleMute,
+                isActive = state.isMuted,
+            ),
         )
-
-        callActionButton(
-            icon = Icons.Default.Add,
-            label = stringResource(R.string.add_call_label),
-            onClick = { onAction(InCallAction.AddCall) },
-            enabled = state.canAddCall,
+        add(
+            ControlSpec(
+                icon = Icons.Default.Add,
+                labelRes = R.string.add_call_label,
+                action = InCallAction.AddCall,
+                enabled = state.canAddCall,
+            ),
         )
-
-        callActionButton(
-            icon = when {
-                holdIsSwap -> Icons.Default.SwapCalls
-                state.primary?.isOnHold == true -> Icons.Default.PlayArrow
-                else -> Icons.Default.Pause
-            },
-            label = stringResource(
-                when {
+        add(
+            ControlSpec(
+                icon = when {
+                    holdIsSwap -> Icons.Default.SwapCalls
+                    state.primary?.isOnHold == true -> Icons.Default.PlayArrow
+                    else -> Icons.Default.Pause
+                },
+                labelRes = when {
                     holdIsSwap -> R.string.swap_label
                     state.primary?.isOnHold == true -> R.string.resume_label
                     else -> R.string.hold_label
                 },
+                action = if (holdIsSwap) InCallAction.Swap else InCallAction.ToggleHold,
+                isActive = !holdIsSwap && state.primary?.isOnHold == true,
+                enabled = holdIsSwap || state.canHold,
             ),
-            onClick = { onAction(if (holdIsSwap) InCallAction.Swap else InCallAction.ToggleHold) },
-            isActive = state.primary?.isOnHold == true,
-            enabled = holdIsSwap || state.canHold,
         )
-
+        // Merge only means anything with two separate calls, and only once the network says they can
+        // be conferenced. Shown next to Swap so the two multi-call options sit together.
         if (state.canMerge) {
-            callActionButton(
-                icon = Icons.Default.SwapCalls,
-                label = stringResource(R.string.merge_label),
-                onClick = { onAction(InCallAction.Merge) },
+            add(
+                ControlSpec(
+                    icon = Icons.AutoMirrored.Filled.MergeType,
+                    labelRes = R.string.merge_calls_label,
+                    action = InCallAction.Merge,
+                ),
             )
         }
     }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 400.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        controls.chunked(CONTROLS_PER_ROW).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                row.forEach { spec ->
+                    callActionButton(
+                        icon = spec.icon,
+                        label = stringResource(spec.labelRes),
+                        onClick = { onAction(spec.action) },
+                        isActive = spec.isActive,
+                        enabled = spec.enabled,
+                    )
+                }
+            }
+        }
+    }
 }
+
+/** One entry in [controlGrid]. Lets the control set be assembled before it is laid out. */
+private data class ControlSpec(
+    val icon: ImageVector,
+    val labelRes: Int,
+    val action: InCallAction,
+    val isActive: Boolean = false,
+    val enabled: Boolean = true,
+)
 
 /**
  * Speaker on the left of hang up, dialpad on its right.
@@ -270,12 +308,18 @@ private fun primaryControlRow(
 /**
  * A second caller arriving while a call is already in progress.
  *
- * Sits over the active call rather than replacing it: the person already on the line stays on screen,
+ * Sits over the active call rather than replacing it, so the person already on the line stays on screen
  * and their audio is untouched while the user decides.
  *
+ * Laid out as two prominent choices plus one secondary, rather than three equal buttons. Three equal
+ * buttons forced "Hold & Accept" and "End & Accept" to wrap onto two lines each, leaving two adjacent
+ * controls that both just read "Accept" — the user could not tell them apart. Declining and answering
+ * are the common choices, so they get the prominent row; ending a call in progress is destructive and
+ * belongs below, spelled out in full.
+ *
  * "Hold & Accept" is hidden when the current call reports it cannot be held — some carrier and radio
- * configurations do — leaving "End & Accept" as the only honest option rather than offering an action
- * that would silently fail.
+ * configurations do — leaving the explicit end-and-accept as the only offered way in, rather than an
+ * action that would silently fail.
  */
 @Composable
 @Suppress("FunctionName")
@@ -291,40 +335,41 @@ private fun callWaitingBanner(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = callColors.glassFill,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         border = BorderStroke(1.dp, callColors.glassBorder),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                callerAvatar(call = call, size = 40.dp)
+                callerAvatar(call = call, size = 44.dp)
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
+                        text = stringResource(R.string.incoming_call_banner_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = callColors.accept,
+                    )
+                    Text(
                         text = call.displayName,
-                        style = MaterialTheme.typography.bodyMedium.copy(
+                        style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.SemiBold,
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = stringResource(R.string.call_status_call_waiting),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 bannerAction(
                     label = stringResource(R.string.decline_label),
+                    icon = Icons.Default.CallEnd,
                     containerColor = callColors.decline,
                     contentColor = callColors.onDecline,
                     onClick = {
@@ -334,36 +379,39 @@ private fun callWaitingBanner(
                     modifier = Modifier.weight(1f),
                 )
 
-                if (!mustEndActiveToAnswer) {
-                    bannerAction(
-                        label = stringResource(R.string.answer_and_hold_label),
-                        containerColor = callColors.accept,
-                        contentColor = callColors.onAccept,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onAnswerHolding()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
                 bannerAction(
-                    label = stringResource(R.string.answer_and_end_label),
-                    containerColor = if (mustEndActiveToAnswer) {
-                        callColors.accept
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    label = stringResource(
+                        if (mustEndActiveToAnswer) {
+                            R.string.answer_and_end_label
+                        } else {
+                            R.string.answer_and_hold_label
+                        },
+                    ),
+                    icon = Icons.Default.Call,
+                    containerColor = callColors.accept,
+                    contentColor = callColors.onAccept,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (mustEndActiveToAnswer) onAnswerEnding() else onAnswerHolding()
                     },
-                    contentColor = if (mustEndActiveToAnswer) {
-                        callColors.onAccept
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // Only offered as a separate choice when holding is actually possible; otherwise it is
+            // already the primary accept action above and repeating it would be noise.
+            if (!mustEndActiveToAnswer) {
+                Spacer(modifier = Modifier.height(10.dp))
+                bannerAction(
+                    label = stringResource(R.string.answer_and_end_current_label),
+                    icon = null,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         onAnswerEnding()
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -374,6 +422,7 @@ private fun callWaitingBanner(
 @Suppress("FunctionName")
 private fun bannerAction(
     label: String,
+    icon: ImageVector?,
     containerColor: androidx.compose.ui.graphics.Color,
     contentColor: androidx.compose.ui.graphics.Color,
     onClick: () -> Unit,
@@ -381,18 +430,32 @@ private fun bannerAction(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         color = containerColor,
         contentColor = contentColor,
         onClick = onClick,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
-        )
+        Row(
+            modifier = Modifier.padding(vertical = 12.dp, horizontal = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -499,6 +562,7 @@ fun callActionButton(
     }
 }
 
+private const val CONTROLS_PER_ROW = 3
 private const val DISABLED_CONTAINER_ALPHA = 0.3f
 private const val DISABLED_CONTENT_ALPHA = 0.38f
 

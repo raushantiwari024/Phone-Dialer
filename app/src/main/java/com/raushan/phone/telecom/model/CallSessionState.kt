@@ -29,6 +29,14 @@ data class CallSessionState(
     val isServiceConnected: Boolean = false,
     /** The user silenced the ringer with a volume key; stop the ring animation and drop the FSI. */
     val isRingerSilenced: Boolean = false,
+    /**
+     * Whether the in-app call UI is currently on screen.
+     *
+     * Lets the notification layer stay out of the way: when the call screen is already showing an
+     * incoming call, a heads-up notification over the top of it gives the user two competing places to
+     * answer from and no indication which one is authoritative.
+     */
+    val isCallUiVisible: Boolean = false,
 ) {
     /** External calls live on another device and conference children are represented by their parent. */
     private val visibleCalls: List<CallModel> =
@@ -82,7 +90,20 @@ data class CallSessionState(
 
     val canSwap: Boolean = activeCall != null && heldCall != null
 
-    val canMerge: Boolean = canSwap && activeCall?.capabilities?.canMergeConference == true
+    /**
+     * Whether the two calls can be merged into a conference.
+     *
+     * Checks the conferenceable-calls list as well as `CAPABILITY_MERGE_CONFERENCE`. Several carriers
+     * populate only the former on a plain two-call setup, so relying on the capability bit alone hid
+     * the Merge control on networks that actually support conferencing.
+     */
+    val canMerge: Boolean = canSwap && (
+        activeCall?.capabilities?.canMergeConference == true ||
+            activeCall?.conferenceableIds?.isNotEmpty() == true
+        )
+
+    /** True once two calls have been merged, so the UI can say so rather than showing two names. */
+    val isConferenceActive: Boolean = activeCall?.isConference == true
 
     /**
      * Whether answering the ringing call requires ending the current one.

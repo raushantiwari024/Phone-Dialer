@@ -267,11 +267,82 @@ class CallActionResolverTest {
     }
 
     @Test
-    fun `merge is refused without the capability`() {
+    fun `merge is refused when neither the capability nor a conferenceable call is present`() {
         val state = CallSessionState(calls = listOf(active, callModel("h", CallState.HOLDING)))
         assertEquals(
             CallActionPlan.Ignored(IgnoreReason.NotCapable),
             CallActionResolver.resolve(state, CallAction.Merge),
+        )
+    }
+
+    @Test
+    fun `merge is allowed via the capability bit`() {
+        val mergeable = callModel(
+            "active",
+            CallState.ACTIVE,
+            capabilities = CallCapabilities(canMergeConference = true),
+        )
+        val state = CallSessionState(calls = listOf(mergeable, callModel("h", CallState.HOLDING)))
+        assertEquals(CallActionPlan.Merge, CallActionResolver.resolve(state, CallAction.Merge))
+    }
+
+    /**
+     * Several carriers populate only `conferenceableCalls` on a plain two-call setup and never set
+     * `CAPABILITY_MERGE_CONFERENCE`. Gating on the capability alone hid Merge on networks that do
+     * support conferencing, which is what the device test surfaced.
+     */
+    @Test
+    fun `merge is allowed when only a conferenceable call is reported`() {
+        val mergeable = callModel("active", CallState.ACTIVE, conferenceableIds = listOf("h"))
+        val state = CallSessionState(calls = listOf(mergeable, callModel("h", CallState.HOLDING)))
+        assertEquals(CallActionPlan.Merge, CallActionResolver.resolve(state, CallAction.Merge))
+    }
+
+    @Test
+    fun `merge needs two calls regardless of capability`() {
+        val mergeable = callModel(
+            "active",
+            CallState.ACTIVE,
+            capabilities = CallCapabilities(canMergeConference = true),
+        )
+        assertEquals(
+            CallActionPlan.Ignored(IgnoreReason.WrongState),
+            CallActionResolver.resolve(
+                CallSessionState(calls = listOf(mergeable)),
+                CallAction.Merge,
+            ),
+        )
+    }
+
+    // --- notification suppression while the call UI is on screen ---
+
+    /**
+     * With the call screen already showing the incoming call, a heads-up notification over the top gave
+     * the user two places to answer from and no way to tell which was authoritative.
+     */
+    @Test
+    fun `call UI visibility is part of the session state`() {
+        val hidden = CallSessionState(calls = listOf(active, ringing), isCallUiVisible = false)
+        val visible = CallSessionState(calls = listOf(active, ringing), isCallUiVisible = true)
+
+        assertEquals(false, hidden.isCallUiVisible)
+        assertEquals(true, visible.isCallUiVisible)
+        // It must not disturb call selection.
+        assertEquals(hidden.ringingCall?.id, visible.ringingCall?.id)
+        assertEquals(hidden.primaryCall?.id, visible.primaryCall?.id)
+        assertEquals(hidden.phase, visible.phase)
+    }
+
+    @Test
+    fun `a merged call is reported as a conference`() {
+        val conference = callModel("conf", CallState.ACTIVE, isConference = true)
+        assertEquals(
+            true,
+            CallSessionState(calls = listOf(conference)).isConferenceActive,
+        )
+        assertEquals(
+            false,
+            CallSessionState(calls = listOf(active)).isConferenceActive,
         )
     }
 

@@ -501,7 +501,11 @@ internal fun callerIdentity(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = call.displayName,
+            text = if (call.isConference) {
+                stringResource(R.string.conference_call_label)
+            } else {
+                call.displayName
+            },
             style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,

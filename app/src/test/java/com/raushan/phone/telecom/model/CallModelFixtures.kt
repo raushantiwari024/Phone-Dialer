@@ -19,6 +19,7 @@ fun callModel(
     connectTimeMillis: Long = 0L,
     capabilities: CallCapabilities = CallCapabilities.NONE,
     presentation: NumberPresentation = NumberPresentation.ALLOWED,
+    conferenceableIds: List<String> = emptyList(),
 ): CallModel = CallModel(
     id = id,
     state = state,
@@ -38,7 +39,7 @@ fun callModel(
     isHdAudio = false,
     childIds = emptyList(),
     parentId = parentId,
-    conferenceableIds = emptyList(),
+    conferenceableIds = conferenceableIds,
     connectTimeMillis = connectTimeMillis,
     creationTimeMillis = 0L,
     capabilities = capabilities,

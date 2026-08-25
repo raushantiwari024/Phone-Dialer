@@ -166,8 +166,13 @@ class TelecomHelper(private val context: Context) {
         val session = CallRepository.state.value
         val active = session.activeCall ?: return
         val held = session.heldCall ?: return
-        if (!active.capabilities.canMergeConference) {
-            Log.w(TAG, "Merge requested but the active call does not support it")
+        // Accepts either signal. Several carriers populate only conferenceableCalls on a plain
+        // two-call setup and never set CAPABILITY_MERGE_CONFERENCE, so gating on the capability bit
+        // alone made Merge unavailable on networks that do support conferencing.
+        val mergeable = active.capabilities.canMergeConference ||
+            active.conferenceableIds.isNotEmpty()
+        if (!mergeable) {
+            Log.w(TAG, "Merge requested but neither the capability nor a conferenceable call is present")
             return
         }
         val activeRaw = CallRepository.rawCall(active.id) ?: return

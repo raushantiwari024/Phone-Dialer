@@ -20,6 +20,8 @@ data class CallCardUiState(
     val state: CallState,
     val durationText: String = CallDuration.ZERO,
     val isEmergency: Boolean = false,
+    /** Set once two calls have been merged, so the UI can name it rather than showing one party. */
+    val isConference: Boolean = false,
 ) {
     val isOnHold: Boolean get() = state == CallState.HOLDING
 

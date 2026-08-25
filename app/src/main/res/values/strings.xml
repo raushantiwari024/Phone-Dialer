@@ -51,6 +51,10 @@
     <string name="merge_label">Merge</string>
     <string name="answer_and_hold_label">Hold &amp; Accept</string>
     <string name="answer_and_end_label">End &amp; Accept</string>
+    <string name="answer_and_end_current_label">End current call &amp; Accept</string>
+    <string name="merge_calls_label">Merge calls</string>
+    <string name="conference_call_label">Conference call</string>
+    <string name="incoming_call_banner_title">Incoming call</string>
 
     <!-- Notification -->
     <string name="incoming_calls_channel_name">Incoming Calls</string>

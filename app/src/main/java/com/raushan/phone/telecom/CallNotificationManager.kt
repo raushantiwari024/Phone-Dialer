@@ -73,10 +73,23 @@ internal class CallNotificationManager(private val context: Context) {
             CallActionReceiver.answerIntent(context, call.id),
         ).setIsVideo(call.isVideo)
 
-        val builder = baseBuilder(CallNotificationChannels.INCOMING)
+        // When the call screen is already on screen it is the authoritative place to answer, so this
+        // notification is posted to the low-importance channel instead: it stays available in the shade
+        // for when the user leaves the app, but it does not pop over the UI. Two heads-up surfaces
+        // offering the same decision, with no indication which one is real, is just confusing.
+        val quiet = state.isCallUiVisible
+        val channel = if (quiet) {
+            CallNotificationChannels.ONGOING
+        } else {
+            CallNotificationChannels.INCOMING
+        }
+
+        val builder = baseBuilder(channel)
             .setContentTitle(call.displayName)
             .setContentText(context.getString(R.string.notification_incoming_call))
-            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setPriority(
+                if (quiet) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_MAX,
+            )
             .setOngoing(true)
             .setAutoCancel(false)
             // Both are set: contentIntent for a tap on the heads-up banner, fullScreenIntent for the
@@ -93,7 +106,9 @@ internal class CallNotificationManager(private val context: Context) {
             // suppressing subsequent alerts risks suppressing the takeover on some OEM builds.
             .setOnlyAlertOnce(false)
 
-        if (!state.isRingerSilenced) {
+        // No full-screen intent when the UI is already visible or the ringer has been silenced —
+        // there is nothing to bring forward in either case.
+        if (!quiet && !state.isRingerSilenced) {
             builder.setFullScreenIntent(InCallIntents.fullScreenIntent(context, call.id), true)
         }
 

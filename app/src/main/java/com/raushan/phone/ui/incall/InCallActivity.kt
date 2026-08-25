@@ -70,6 +70,20 @@ class InCallActivity : ComponentActivity() {
         observeSession()
     }
 
+    /**
+     * Tells the notification layer the call UI is on screen, so it does not raise a heads-up
+     * notification over the top of a call the user can already see and act on.
+     */
+    override fun onStart() {
+        super.onStart()
+        CallRepository.setCallUiVisible(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        CallRepository.setCallUiVisible(false)
+    }
+
     /** `launchMode="singleInstance"`, so a second launch is redelivered here rather than recreating. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

@@ -259,6 +259,7 @@ class InCallViewModel(application: Application) : AndroidViewModel(application) 
         state = state,
         durationText = CallDuration.since(connectTimeMillis, System.currentTimeMillis()),
         isEmergency = isEmergency,
+        isConference = isConference,
     )
 
     override fun onCleared() {
