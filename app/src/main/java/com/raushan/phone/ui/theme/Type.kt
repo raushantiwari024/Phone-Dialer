@@ -23,11 +23,41 @@ val Typography = Typography(
         lineHeight = 40.sp,
         letterSpacing = (-0.01).sp
     ),
+    // displayMedium, headlineMedium, titleLarge and labelLarge are defined because the in-call and
+    // contact screens use exactly those four. They were previously undefined, so those screens fell
+    // through to M3 stock sizes and weights and then patched over it with inline .copy() calls.
+    displayMedium = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Bold,
+        fontSize = 40.sp,
+        lineHeight = 48.sp,
+        letterSpacing = (-0.01).sp
+    ),
+    headlineMedium = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 28.sp,
+        lineHeight = 36.sp
+    ),
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Medium,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = 0.5.sp
+    ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Medium,
         fontSize = 20.sp,
         lineHeight = 28.sp
+    ),
+    labelLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.1.sp
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.Default,

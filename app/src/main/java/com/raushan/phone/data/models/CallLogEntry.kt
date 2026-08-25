@@ -8,5 +8,6 @@ data class CallLogEntry(
     val type: Int,
     val cachedName: String? = null,
     val cachedNumberType: Int? = null,
-    val cachedNumberLabel: String? = null
+    val cachedNumberLabel: String? = null,
+    val photoUri: String? = null
 )

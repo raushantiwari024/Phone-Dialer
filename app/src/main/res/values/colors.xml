@@ -7,4 +7,19 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!--
+      Notification accent. Must be a framework colour resource because NotificationCompat cannot take
+      a Compose Color. Keep in sync with ElectricBlue in ui/theme/Color.kt.
+    -->
+    <color name="call_notification_accent">#FF3399FF</color>
+
+    <!--
+      Window backgrounds, painted before Compose draws its first frame. Overridden in values-night.
+      Keep in sync with LightBackground / Background in ui/theme/Color.kt: a mismatch here is what
+      produces a flash of the wrong colour on launch, which was very visible when a call took over
+      the lock screen.
+    -->
+    <color name="window_background">#FFFCFCFF</color>
+    <color name="incall_window_background">#FFFCFCFF</color>
 </resources>

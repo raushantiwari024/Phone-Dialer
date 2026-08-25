@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 @OptIn(ExperimentalFoundationApi::class)
+@Suppress("DEPRECATION")
 @Composable
 fun DialpadScreen(
     viewModel: DialpadViewModel = viewModel(),

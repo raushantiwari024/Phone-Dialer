@@ -1,5 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.Phone" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      windowBackground is a colour resource with a values-night variant, so the frame painted before
+      Compose draws matches whichever scheme is active. It was previously whatever the framework parent
+      chose, which meant a white flash even in dark mode — very visible when a call took over the lock
+      screen.
+    -->
+    <style name="Theme.Phone" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+
+    <!-- Theme for the dedicated call activity. -->
+    <style name="Theme.Phone.InCall" parent="Theme.Phone">
+        <item name="android:windowBackground">@color/incall_window_background</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowAnimationStyle">@style/Animation.Phone.InCall</item>
+    </style>
+
+    <!--
+      A call taking over the screen should fade in, not slide in from the side like an ordinary
+      navigation push.
+    -->
+    <style name="Animation.Phone.InCall" parent="android:Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@android:anim/fade_in</item>
+        <item name="android:activityCloseExitAnimation">@android:anim/fade_out</item>
+    </style>
+
 </resources>
