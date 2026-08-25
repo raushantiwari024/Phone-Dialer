@@ -6,9 +6,11 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.*
@@ -47,16 +50,23 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.raushan.phone.R
 
 @OptIn(ExperimentalFoundationApi::class)
 @Suppress("DEPRECATION")
 @Composable
 fun DialpadScreen(
     viewModel: DialpadViewModel = viewModel(),
-    onCallClick: (String) -> Unit
+    onCallClick: (String) -> Unit,
+    /**
+     * Dismisses the dial pad. Null when it is the whole screen rather than a panel over Recents, in
+     * which case there is nothing to dismiss back to.
+     */
+    onClose: (() -> Unit)? = null,
 ) {
     val phoneNumber by viewModel.phoneNumber.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
@@ -90,7 +100,24 @@ fun DialpadScreen(
             .padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Search Results Area (Flexible)
+        if (onClose != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding(),
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = stringResource(R.string.close_dialpad),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // Recent contacts / call suggestions sit above the pad. Empty until the user types.
         Box(modifier = Modifier.weight(1f)) {
             if (searchResults.isNotEmpty()) {
                 LazyColumn(
@@ -202,29 +229,42 @@ fun DialpadScreen(
             }
         }
 
-        // Keypad
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            modifier = Modifier.width(300.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // Keypad.
+        //
+        // Four plain Rows of three rather than a LazyVerticalGrid. The grid gave each cell
+        // (300 - 24) / 3 = 92dp while DialKey was a fixed 80dp, so keys sat left-aligned inside wider
+        // cells and the columns did not line up. Equal weights plus a 1:1 aspect ratio make all twelve
+        // keys identical in size and exactly aligned, and a lazy container was never appropriate for a
+        // fixed twelve-item grid inside a scrolling Column.
+        Column(
+            modifier = Modifier.width(KEYPAD_WIDTH),
+            verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
         ) {
-            items(keys) { keyInfo ->
-                DialKey(
-                    info = keyInfo,
-                    onClick = { viewModel.onDigitClick(keyInfo.number) },
-                    onLongClick = {
-                        if (keyInfo.number == "0") {
-                            viewModel.onDigitClick("+")
-                        } else {
-                            val speedDial = viewModel.getSpeedDialNumber(context, keyInfo.number)
-                            if (!speedDial.isNullOrEmpty()) {
-                                onCallClick(speedDial)
-                                Toast.makeText(context, "Calling speed dial: $speedDial", Toast.LENGTH_SHORT).show()
-                            }
-                        }
+            keys.chunked(KEYPAD_COLUMNS).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(KEY_SPACING),
+                ) {
+                    row.forEach { keyInfo ->
+                        DialKey(
+                            info = keyInfo,
+                            onClick = { viewModel.onDigitClick(keyInfo.number) },
+                            onLongClick = {
+                                if (keyInfo.number == "0") {
+                                    viewModel.onDigitClick("+")
+                                } else {
+                                    val speedDial = viewModel.getSpeedDialNumber(context, keyInfo.number)
+                                    if (!speedDial.isNullOrEmpty()) {
+                                        onCallClick(speedDial)
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f),
+                        )
                     }
-                )
+                }
             }
         }
 
@@ -297,16 +337,24 @@ data class DialKeyInfo(val number: String, val letters: String)
 fun DialKey(
     info: DialKeyInfo,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
 
-    Box(
-        modifier = Modifier
-            .size(80.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
-            .combinedClickable(
+    // Was background(surfaceVariant.copy(alpha = 0.2f)) — 20% of #353534 over a #131313 background,
+    // which rendered as twelve near-invisible circles. A real container colour plus a hairline border
+    // and a small elevation separates the keys from the background without making them loud.
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = KEY_BORDER_ALPHA)),
+        shadowElevation = KEY_ELEVATION,
+        tonalElevation = KEY_ELEVATION,
+    ) {
+        Box(
+            modifier = Modifier.combinedClickable(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     onClick()
@@ -314,34 +362,39 @@ fun DialKey(
                 onLongClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     onLongClick()
-                }
+                },
             ),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = info.number,
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                lineHeight = 32.sp
-            )
-            if (info.letters.isNotEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
                 Text(
-                    text = info.letters,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    letterSpacing = 1.sp
+                    text = info.number,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
+                if (info.letters.isNotEmpty()) {
+                    Text(
+                        text = info.letters,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        letterSpacing = 1.sp,
+                    )
+                }
             }
         }
     }
 }
+
+private val KEYPAD_WIDTH = 300.dp
+private val KEY_SPACING = 12.dp
+private val KEY_ELEVATION = 2.dp
+private const val KEYPAD_COLUMNS = 3
+private const val KEY_BORDER_ALPHA = 0.5f
 
 @Composable
 fun SimpleContactItem(

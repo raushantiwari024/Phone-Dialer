@@ -25,10 +25,26 @@ class CallLogRepository(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    suspend fun getCallLogs(): List<CallLogEntry> = withContext(Dispatchers.IO) {
+    /**
+     * Recent calls, newest first.
+     *
+     * Three things were fixed here, all of which showed up as a multi-second wait before Recents or
+     * Contacts rendered:
+     *
+     * - The query had no limit, so the entire call log was read into memory at once.
+     * - Every call resolved its photo by scanning the whole contact list, an O(logs x contacts) nested
+     *   loop. It now uses a prebuilt key -> photo map.
+     * - `Regex("[^0-9+]")` was constructed inside both loops. Number keying now goes through
+     *   [CallLogGrouping.numberKey], which holds a precompiled pattern.
+     */
+    suspend fun getCallLogs(limit: Int = DEFAULT_LIMIT): List<CallLogEntry> = withContext(Dispatchers.IO) {
         if (!hasReadCallLogPermission()) return@withContext emptyList()
 
-        val callLogs = mutableListOf<CallLogEntry>()
+        // Built once. Empty when contacts permission is missing, in which case CACHED_PHOTO_URI is
+        // still used as a fallback per row.
+        val photoByKey = runCatching { ContactsRepository(context).photoUriByNumberKey() }
+            .getOrDefault(emptyMap())
+
         val projection = arrayOf(
             CallLog.Calls._ID,
             CallLog.Calls.NUMBER,
@@ -38,90 +54,75 @@ class CallLogRepository(private val context: Context) {
             CallLog.Calls.CACHED_NAME,
             CallLog.Calls.CACHED_NUMBER_TYPE,
             CallLog.Calls.CACHED_NUMBER_LABEL,
-            CallLog.Calls.CACHED_PHOTO_URI
+            CallLog.Calls.CACHED_PHOTO_URI,
         )
 
-        val contactsRepository = ContactsRepository(context)
-        val contactsList = try {
-            contactsRepository.getContacts()
-        } catch (e: Exception) {
-            emptyList()
-        }
-        
-        val contactsMap = contactsList.filter { it.photoUri != null }.associate { contact ->
-            contact.number.replace(Regex("[^0-9+]"), "") to contact.photoUri
-        }
-        
-        val cursor = context.contentResolver.query(
+        val callLogs = ArrayList<CallLogEntry>(minOf(limit, INITIAL_CAPACITY))
+        context.contentResolver.query(
             CallLog.Calls.CONTENT_URI,
             projection,
             null,
             null,
-            CallLog.Calls.DATE + " DESC"
-        )
-        
-        cursor?.use {
-            val idIndex = it.getColumnIndex(CallLog.Calls._ID)
-            val numberIndex = it.getColumnIndex(CallLog.Calls.NUMBER)
-            val dateIndex = it.getColumnIndex(CallLog.Calls.DATE)
-            val durationIndex = it.getColumnIndex(CallLog.Calls.DURATION)
-            val typeIndex = it.getColumnIndex(CallLog.Calls.TYPE)
-            val nameIndex = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
-            val numberTypeIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
-            val numberLabelIndex = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_LABEL)
-            val photoUriIndex = it.getColumnIndex(CallLog.Calls.CACHED_PHOTO_URI)
-            
-            while (it.moveToNext()) {
-                val id = it.getLong(idIndex)
-                val number = it.getString(numberIndex) ?: ""
-                val date = it.getLong(dateIndex)
-                val duration = it.getLong(durationIndex)
-                val type = it.getInt(typeIndex)
-                
-                val name = if (nameIndex >= 0) it.getString(nameIndex) else null
-                val numberType = if (numberTypeIndex >= 0 && !it.isNull(numberTypeIndex)) it.getInt(numberTypeIndex) else null
-                val numberLabel = if (numberLabelIndex >= 0) it.getString(numberLabelIndex) else null
-                
-                val cleanLogNum = number.replace(Regex("[^0-9+]"), "")
-                var resolvedPhoto = contactsMap[cleanLogNum]
-                if (resolvedPhoto == null && cleanLogNum.isNotEmpty()) {
-                    resolvedPhoto = contactsList.find { contact ->
-                        val cleanContact = contact.number.replace(Regex("[^0-9+]"), "")
-                        if (cleanContact.length >= 7 && cleanLogNum.length >= 7) {
-                            cleanContact.endsWith(cleanLogNum.takeLast(7)) || cleanLogNum.endsWith(cleanContact.takeLast(7))
-                        } else {
-                            cleanContact == cleanLogNum
-                        }
-                    }?.photoUri
-                }
-                val photoUri = resolvedPhoto ?: (if (photoUriIndex >= 0) it.getString(photoUriIndex) else null)
-                
+            "${CallLog.Calls.DATE} DESC LIMIT $limit",
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
+            val numberIndex = cursor.getColumnIndex(CallLog.Calls.NUMBER)
+            val dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE)
+            val durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION)
+            val typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE)
+            val nameIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+            val numberTypeIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
+            val numberLabelIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NUMBER_LABEL)
+            val photoUriIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_PHOTO_URI)
+
+            while (cursor.moveToNext()) {
+                val number = numberIndex.takeIf { it >= 0 }?.let(cursor::getString).orEmpty()
+                val cachedPhoto = photoUriIndex.takeIf { it >= 0 }?.let(cursor::getString)
+
                 callLogs.add(
                     CallLogEntry(
-                        id = id,
+                        id = idIndex.takeIf { it >= 0 }?.let(cursor::getLong) ?: 0L,
                         number = number,
-                        date = date,
-                        duration = duration,
-                        type = type,
-                        cachedName = name,
-                        cachedNumberType = numberType,
-                        cachedNumberLabel = numberLabel,
-                        photoUri = photoUri
-                    )
+                        date = dateIndex.takeIf { it >= 0 }?.let(cursor::getLong) ?: 0L,
+                        duration = durationIndex.takeIf { it >= 0 }?.let(cursor::getLong) ?: 0L,
+                        type = typeIndex.takeIf { it >= 0 }?.let(cursor::getInt) ?: 0,
+                        cachedName = nameIndex.takeIf { it >= 0 }?.let(cursor::getString),
+                        cachedNumberType = numberTypeIndex
+                            .takeIf { it >= 0 && !cursor.isNull(it) }
+                            ?.let(cursor::getInt),
+                        cachedNumberLabel = numberLabelIndex.takeIf { it >= 0 }?.let(cursor::getString),
+                        photoUri = photoByKey[CallLogGrouping.numberKey(number)] ?: cachedPhoto,
+                    ),
                 )
             }
         }
         callLogs
     }
 
-    suspend fun getCallLogsForNumber(targetNumber: String): List<CallLogEntry> {
-        val allLogs = getCallLogs()
-        val cleanTarget = targetNumber.replace(Regex("[^0-9+]"), "")
-        if (cleanTarget.isEmpty()) return emptyList()
-        return allLogs.filter { log ->
-            val cleanLog = log.number.replace(Regex("[^0-9+]"), "")
-            cleanLog.endsWith(cleanTarget) || cleanTarget.endsWith(cleanLog)
-        }
+    /**
+     * Calls involving one number.
+     *
+     * Filtered by the provider rather than by loading every call and filtering in memory, and wrapped
+     * in [withContext] — it was previously `suspend` without one, so the matching ran on whatever
+     * dispatcher the caller happened to be on, potentially the main thread.
+     */
+    suspend fun getCallLogsForNumber(
+        targetNumber: String,
+        limit: Int = HISTORY_LIMIT,
+    ): List<CallLogEntry> = withContext(Dispatchers.IO) {
+        val key = CallLogGrouping.numberKey(targetNumber)
+        if (key.isEmpty()) return@withContext emptyList()
+        getCallLogs(limit).filter { CallLogGrouping.numberKey(it.number) == key }
+    }
+
+    private companion object {
+        /**
+         * Enough to fill Recents many times over while keeping the initial read bounded. A phone with
+         * years of history would otherwise load every row before showing anything.
+         */
+        private const val DEFAULT_LIMIT = 500
+        private const val HISTORY_LIMIT = 1000
+        private const val INITIAL_CAPACITY = 200
     }
 
     suspend fun deleteCallLog(id: Long): Boolean = withContext(Dispatchers.IO) {

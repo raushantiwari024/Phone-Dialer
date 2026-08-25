@@ -70,4 +70,20 @@
     <string name="speaker_on_label">Speaker On</string>
     <string name="speaker_off_label">Speaker Off</string>
     <string name="hang_up_label">Hang Up</string>
+
+    <!-- Contacts -->
+    <string name="contacts_title">Contacts</string>
+    <string name="contacts_search_hint">Search name or number</string>
+    <string name="contacts_search_clear">Clear search</string>
+    <string name="contacts_empty">No contacts found</string>
+    <string name="contacts_no_search_results">No matching contacts</string>
+
+    <!-- Recents -->
+    <string name="recents_title">Recents</string>
+    <string name="recents_tab">Recents</string>
+    <string name="contacts_tab">Contacts</string>
+    <string name="open_dialpad">Open dial pad</string>
+    <string name="close_dialpad">Close dial pad</string>
+    <string name="recents_empty">No recent calls</string>
+    <string name="recents_empty_missed">No missed calls</string>
 </resources>

@@ -7,6 +7,8 @@ import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
 import com.raushan.phone.data.models.Contact
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class ContactsRepository(private val context: Context) {
@@ -18,38 +20,88 @@ class ContactsRepository(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    suspend fun getContacts(): List<Contact> = withContext(Dispatchers.IO) {
+    /**
+     * Every phone number in the address book, one [Contact] per number.
+     *
+     * Cached process-wide. Three separate callers used to invoke this on app start — the contacts list,
+     * the dialpad's T9 search, and the call log's photo resolution — each performing a full scan of the
+     * Phone table. On a large address book that was the bulk of the several seconds before the Contacts
+     * screen showed anything.
+     *
+     * A contact with three numbers appears three times here, which is what number matching needs. Use
+     * [getDistinctContacts] for anything that displays a list of people.
+     */
+    suspend fun getContacts(): List<Contact> {
+        cache?.let { return it }
+        return cacheMutex.withLock {
+            // Re-check inside the lock: several callers racing on startup should produce one query,
+            // not one each.
+            cache ?: queryContacts().also { cache = it }
+        }
+    }
+
+    /**
+     * One entry per person, for display.
+     *
+     * The provider returns a row per phone number, so a contact with mobile, home and work numbers was
+     * previously listed three times.
+     */
+    suspend fun getDistinctContacts(): List<Contact> =
+        getContacts().distinctBy { it.id }
+
+    /**
+     * Numbers keyed for matching, built once.
+     *
+     * Lets the call log resolve a photo per row with a map lookup instead of scanning the whole contact
+     * list for every entry, which was an O(logs x contacts) nested loop.
+     */
+    suspend fun photoUriByNumberKey(): Map<String, String> {
+        val result = HashMap<String, String>()
+        for (contact in getContacts()) {
+            val photo = contact.photoUri ?: continue
+            result.putIfAbsent(CallLogGrouping.numberKey(contact.number), photo)
+        }
+        return result
+    }
+
+    /** Drops the cache so the next read re-queries. Call after the address book may have changed. */
+    fun invalidate() {
+        cache = null
+    }
+
+    private suspend fun queryContacts(): List<Contact> = withContext(Dispatchers.IO) {
         if (!hasReadContactsPermission()) return@withContext emptyList()
 
-        val contacts = mutableListOf<Contact>()
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
             ContactsContract.CommonDataKinds.Phone.NUMBER,
-            ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI
+            ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI,
         )
-        
-        val cursor = context.contentResolver.query(
+
+        val contacts = mutableListOf<Contact>()
+        context.contentResolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
             projection,
             null,
             null,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-        )
-        
-        cursor?.use {
-            val idIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
-            val nameIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-            val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            
-            val photoUriIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI)
-            
-            while (it.moveToNext()) {
-                val id = it.getLong(idIndex)
-                val name = it.getString(nameIndex) ?: "Unknown"
-                val number = it.getString(numberIndex) ?: ""
-                val photoUri = if (photoUriIndex >= 0) it.getString(photoUriIndex) else null
-                contacts.add(Contact(id, name, number, photoUri))
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC",
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+            val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            val photoIndex =
+                cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI)
+
+            while (cursor.moveToNext()) {
+                contacts.add(
+                    Contact(
+                        id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L,
+                        name = nameIndex.takeIf { it >= 0 }?.let(cursor::getString) ?: UNKNOWN_NAME,
+                        number = numberIndex.takeIf { it >= 0 }?.let(cursor::getString).orEmpty(),
+                        photoUri = photoIndex.takeIf { it >= 0 }?.let(cursor::getString),
+                    ),
+                )
             }
         }
         contacts
@@ -153,5 +205,16 @@ class ContactsRepository(private val context: Context) {
         /** Precompiled — the old code rebuilt this on every comparison. */
         private val PHONE_CLEAN_REGEX = Regex("[^0-9+]")
         private const val SIP_MARKER = "@"
+        private const val UNKNOWN_NAME = "Unknown"
+
+        /**
+         * Shared across every [ContactsRepository] instance.
+         *
+         * There is no DI in this project, so each ViewModel constructs its own repository. Holding the
+         * cache on the companion is what makes those instances share one query instead of one each.
+         */
+        @Volatile
+        private var cache: List<Contact>? = null
+        private val cacheMutex = Mutex()
     }
 }
